@@ -1,6 +1,5 @@
 <div align="center">
 
-<!-- Replace with your generated logo -->
 <img src="assets/snapbooth-logo.jpg" alt="SnapBooth" width="600"/>
 
 # SnapBooth
@@ -18,18 +17,20 @@
 
 ## What is SnapBooth?
 
-SnapBooth is a browser-based virtual photobooth built with Streamlit. It captures a series of photos from the user's webcam, lets them apply filters and emoji stickers (with face detection), composes everything into a classic vertical strip, and exports it as a high-resolution JPG or a print-ready PDF.
+SnapBooth is a browser-based virtual photobooth built with Streamlit. It captures a series of photos from the user's webcam, lets them choose a layout, apply filters and stickers, composes everything into a polished strip or grid, and exports it as a high-resolution JPG or print-ready PDF.
 
 ---
 
 ## Features
 
-- **5 frame styles** — Classic, Retro, Minimalist, Neon, Pastel
-- **6 image filters** — Original, Black & White, Sepia, Retro, Cool Tone, Vivid
-- **Face-tracked stickers** — Sunglasses, crown, cat ears, and more (powered by MediaPipe)
-- **Strip compositor** — Photos assembled into a polished vertical strip with branding
-- **Dual export** — Download as JPEG (social share) or PDF (print-ready, A4)
-- **All in-memory** — No files written to disk; camera data never leaves the session
+- **9 layout options** — 1×3, 1×4, 1×6 strips and 2×2, 2×3, 2×4, 3×2, 3×3, 4×2 grids
+- **23 frame styles** — Classic, Film Strip, Pink Heart, Garden, Blue Sky, Vintage, Neon Glow, Lavender, Midnight, Cherry Blossom, Gold Foil, Ocean Wave, Galaxy, Rose Gold, Pastel Dream, Autumn, Mint Fresh, Black & Gold, Sakura, Electric Blue, Warm Sunset, Ice Crystal, Purple Rain
+- **23 image filters** — Original, B&W, Sepia, Retro, Cool, Vivid, Soft, Warm, Fade, ✨ Golden, 🌸 Cherry, 🎞️ Film, ⚡ Neon, 🍬 Pastel, 🌑 Moody, 💿 Y2K, 🍵 Matcha, 💜 Lavender, 🔍 Crisp, 🌆 Dusk, 🗼 Tokyo, 🩷 Candy, 📷 Polaroid
+- **12 sticker themes** — Hearts, Stars, Flowers, Sparkles, Clovers, Butterflies, Diamonds, Bows, Crowns, Bubbles, Confetti (all PIL-drawn, no dependencies)
+- **HD strip compositor** — renders at 2× resolution internally, downscaled for crisp anti-aliased output
+- **Dual export** — download as JPEG (quality 96, 4:4:4 chroma) or PDF (ReportLab A4, print-ready)
+- **Mobile block** — detects phones/tablets via JS and shows a polished "use desktop" overlay
+- **All in-memory** — no files written to disk; camera data never leaves the session
 
 ---
 
@@ -39,7 +40,7 @@ SnapBooth is a browser-based virtual photobooth built with Streamlit. It capture
 
 ```bash
 # Clone
-git clone https://github.com/your-username/snapbooth.git
+git clone https://github.com/evan-william/snapbooth.git
 cd snapbooth
 
 # Install dependencies (Python 3.10+ recommended)
@@ -64,12 +65,17 @@ chmod +x run_tests.sh
 The app is a four-stage flow managed by Streamlit's session state:
 
 ```
-[ Frame Selection ] → [ Camera Capture ] → [ Preview & Effects ] → [ Download ]
+[ Layout + Frame ] → [ Camera Capture ] → [ Preview & Effects ] → [ Download ]
 ```
 
 Each stage is an independent render function. All state transitions go through
 `core/session.py`, which is the single source of truth for reads and writes to
 `st.session_state`.
+
+**Key technical detail — processed photos are stored as JPEG bytes, not PIL Image objects.**
+PIL objects expire from Streamlit's in-memory media cache between reruns, causing
+`MediaFileHandler` errors and visible flickering. Bytes survive `st.session_state`
+serialization perfectly and are converted back to PIL only when compositing is needed.
 
 ---
 
@@ -83,17 +89,18 @@ snapbooth/
 ├── .streamlit/
 │   └── config.toml             # Theme configuration
 ├── config/
-│   └── settings.py             # Constants, frame/filter/sticker configs
+│   └── settings.py             # Constants, layout/frame/filter/sticker configs
 ├── core/
 │   ├── validation.py           # Magic-byte image validation
-│   ├── filters.py              # OpenCV + PIL filter pipeline
-│   ├── stickers.py             # MediaPipe face detection + emoji overlay
-│   ├── compositor.py           # PIL strip layout engine
+│   ├── filters.py              # PIL + NumPy filter pipeline (23 filters)
+│   ├── stickers.py             # PIL-drawn themed sticker overlays
+│   ├── compositor.py           # HD strip/grid layout engine (2× render)
 │   ├── exporter.py             # JPG + ReportLab PDF export
 │   └── session.py              # Streamlit session state helpers
 ├── ui/
-│   ├── styles.py               # CSS injection
-│   ├── template_page.py        # Stage 1 — frame selection
+│   ├── styles.py               # Global CSS injection
+│   ├── mobile_block.py         # JS mobile detection + block overlay
+│   ├── template_page.py        # Stage 1 — layout + frame selection
 │   ├── camera_page.py          # Stage 2 — sequential photo capture
 │   ├── preview_page.py         # Stage 3 — filter/sticker/frame tuning
 │   └── download_page.py        # Stage 4 — strip display + download
@@ -111,10 +118,25 @@ snapbooth/
 | Layer | Technology |
 |---|---|
 | UI framework | Streamlit |
-| Image processing | OpenCV, Pillow |
-| Face detection | MediaPipe |
+| Image processing | Pillow, NumPy |
 | PDF generation | ReportLab |
 | Testing | pytest, pytest-cov |
+
+---
+
+## Layouts
+
+| Key | Name | Photos |
+|---|---|---|
+| `1x3` | 1 × 3 Strip | 3 |
+| `1x4` | 1 × 4 Strip | 4 |
+| `1x6` | 1 × 6 Strip | 6 |
+| `2x2` | 2 × 2 Grid | 4 |
+| `2x3` | 2 × 3 Grid | 6 |
+| `2x4` | 2 × 4 Grid | 8 |
+| `3x2` | 3 × 2 Grid | 6 |
+| `3x3` | 3 × 3 Grid | 9 |
+| `4x2` | 4 × 2 Grid | 8 |
 
 ---
 
@@ -129,11 +151,13 @@ snapbooth/
 
 ## Roadmap
 
-- [ ] Background removal (via `rembg`)
-- [ ] Horizontal strip layout option
+- [x] Multiple layout options (strips + grids)
+- [x] Aesthetic filter collection (23 filters)
+- [x] Themed sticker overlays (12 themes, PIL-drawn)
+- [x] HD output (2× internal render + sharpness pass)
+- [x] Mobile block screen
 - [ ] Timer countdown before each shot
-- [ ] Custom text overlay on the strip header
-- [ ] Streamlit Cloud deployment
+- [ ] Custom text overlay on strip header/footer
 
 ---
 
@@ -156,6 +180,6 @@ Distributed under the MIT License. See [LICENSE](LICENSE) for details.
 
 <div align="center">
 
-Built with Streamlit
+Built with ❤️ by **Evan William** · © 2026 SnapBooth · All rights reserved
 
 </div>

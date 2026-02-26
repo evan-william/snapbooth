@@ -45,15 +45,6 @@ def _mirror_image(data: bytes) -> bytes:
 
 
 def _build_processed_as_bytes() -> list:
-    """
-    Process all stored photos with current filter/sticker.
-    Returns list[bytes] — JPEG bytes, NOT PIL Image objects.
-
-    Storing bytes (not PIL objects) is critical: PIL Images are Python objects
-    that Streamlit serializes via its media cache. That cache expires between
-    reruns, causing MediaFileHandler "Missing file" errors and UI flickering.
-    Plain bytes survive session_state perfectly.
-    """
     filter_key  = get_filter()
     sticker_cfg = STICKER_MAP.get(get_sticker())
     result = []
@@ -64,7 +55,6 @@ def _build_processed_as_bytes() -> list:
         img = apply_filter(img, filter_key)
         if sticker_cfg and sticker_cfg.key != "none":
             img = apply_sticker(img, sticker_cfg)
-        # Serialize to bytes immediately — never store PIL objects in session state
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=95, subsampling=0)
         result.append(buf.getvalue())
@@ -72,18 +62,27 @@ def _build_processed_as_bytes() -> list:
 
 
 _CAMERA_CSS = """<style>
-/* Mirror live video feed → selfie feel */
-[data-testid="stCameraInput"] video {
-    transform: scaleX(-1) !important;
+[data-testid="stCameraInput"] video { transform: scaleX(-1) !important; }
+[data-testid="stCameraInput"] img   { transform: scaleX(-1) !important; }
+
+.snap-footer {
+    margin-top: 3rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid #1e1e1e;
+    text-align: center;
 }
-/*
- * KEY FIX: After capture, Streamlit shows the raw captured frame as an <img>
- * inside the widget BEFORE Python reacts. That img is unflipped → user sees
- * the jarring flip for a split second.
- * By also flipping the img, the transition is invisible.
- */
-[data-testid="stCameraInput"] img {
-    transform: scaleX(-1) !important;
+.snap-footer-name {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #555;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+.snap-footer-copy {
+    font-size: 0.68rem;
+    color: #333;
+    margin-top: 0.2rem;
+    letter-spacing: 0.06em;
 }
 </style>"""
 
@@ -131,11 +130,7 @@ def render():
                 add_photo(pending)
                 set_pending_photo(None)
                 new_count = photos_count()
-
                 if new_count >= max_photos:
-                    # GLITCH FIX: pre-process to bytes HERE before switching stage.
-                    # This prevents cold-start processing in preview_page which
-                    # caused multiple reruns → visible flickering.
                     with st.spinner("✨ Preparing your strip…"):
                         processed_bytes = _build_processed_as_bytes()
                         if processed_bytes:
@@ -152,7 +147,8 @@ def render():
             set_stage(STAGE_TEMPLATE)
             st.rerun()
 
-        return  # don't render camera widget while confirming
+        _render_footer()
+        return
 
     # ══════════════════════════════════════════════════════════════════════
     # BRANCH B — Live camera
@@ -219,6 +215,8 @@ def render():
     if 0 < count < max_photos:
         remaining = max_photos - count
         st.caption(f"{remaining} more photo{'s' if remaining > 1 else ''} to go.")
+
+    _render_footer()
 
 
 def _render_progress_dots(done: int, total: int):
