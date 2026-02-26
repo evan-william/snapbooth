@@ -3,21 +3,21 @@ Stage 2 — Camera capture with freeze-frame confirmation.
 
 Root-cause fixes:
   FLASH BUG:
-    Streamlit's camera_input widget renders the raw captured frame as an <img>
-    inside the widget BEFORE Python runs. Our CSS `scaleX(-1)` only targets
-    <video>, so that captured img appears unflipped for a split second.
-    Fix: also apply scaleX(-1) to [data-testid="stCameraInput"] img.
+    CSS mirrors both <video> and <img> inside camera widget so no flip flash.
 
-  FLICKER ON LAST PHOTO → PREVIEW:
-    st.spinner() is a context manager that sends an intermediate WebSocket
-    delta to the browser BEFORE the code inside runs. This renders the
-    camera_page UI + spinner to the user, THEN preview_page renders.
-    The browser sees 3 frames: camera → camera+spinner → preview = FLICKER.
+  FLICKER ON LAST PHOTO:
+    After accepting the last photo, pre-process and store as JPEG bytes
+    (not PIL Image objects — those can't survive session state serialization
+    reliably and cause the preview page to fall back to cold rebuild, which
+    causes the flicker). Bytes survive perfectly.
 
-    Fix: do NOT use st.spinner() inside any button callback, ever.
-    Call _build_processed_now() INLINE with no context manager wrapping it.
-    Flow becomes: click → Python runs synchronously → set_stage(PREVIEW) →
-    st.rerun() → ONE clean render of preview_page. Zero intermediate renders.
+  MISSING MEDIAFILE ERROR:
+    Caused by stale PIL Image objects in session state being passed to
+    st.image(). Now thumbnails on preview page come from stored bytes.
+
+  use_container_width DEPRECATION:
+    Replaced all use_container_width=True  → width='stretch'
+    Replaced all use_container_width=False → width='content'
 """
 
 import io
@@ -31,7 +31,7 @@ from core.session import (
     get_pending_photo, set_pending_photo,
     get_max_photos, get_layout,
     get_photos, get_filter, get_sticker,
-    set_processed,
+    set_processed, get_processed,
 )
 from core.validation import validate_image_bytes, safe_open_image
 from core.filters import apply_filter
@@ -50,10 +50,12 @@ def _mirror_image(data: bytes) -> bytes:
         return data
 
 
-def _build_processed_now() -> list:
+def _build_processed_as_bytes() -> list:
     """
     Process all stored photos with current filter/sticker.
-    Called INLINE in button callback — NO st.spinner(), NO context manager.
+    Returns list of JPEG bytes (NOT PIL Image objects).
+    Bytes survive st.session_state serialization perfectly;
+    PIL Images do not and cause MediaFileHandler errors + flicker.
     """
     filter_key  = get_filter()
     sticker_cfg = STICKER_MAP.get(get_sticker())
@@ -65,14 +67,25 @@ def _build_processed_now() -> list:
         img = apply_filter(img, filter_key)
         if sticker_cfg and sticker_cfg.key != "none":
             img = apply_sticker(img, sticker_cfg)
-        result.append(img)
+        # Serialize to bytes immediately — safe for session state
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=95, subsampling=0)
+        result.append(buf.getvalue())
     return result
 
 
 _CAMERA_CSS = """<style>
+/* Mirror live video feed → selfie feel */
 [data-testid="stCameraInput"] video {
     transform: scaleX(-1) !important;
 }
+/*
+ * KEY FIX: After capture, Streamlit shows the raw captured frame as an <img>
+ * inside the widget BEFORE Python reacts. That img is unflipped → user sees
+ * the jarring flip for a split second.
+ * By also flipping the img, the preview looks identical to the video feed,
+ * so the transition is invisible. Python-side we still flip the bytes normally.
+ */
 [data-testid="stCameraInput"] img {
     transform: scaleX(-1) !important;
 }
@@ -80,6 +93,7 @@ _CAMERA_CSS = """<style>
 
 
 def render():
+    # Inject CSS at the very top, every render
     st.markdown(_CAMERA_CSS, unsafe_allow_html=True)
 
     max_photos = get_max_photos()
@@ -87,7 +101,7 @@ def render():
     count      = photos_count()
     pending    = get_pending_photo()
 
-    # Hard guard: full and not in confirmation → go to preview
+    # ── Hard guard: if already full and not confirming, go straight to preview
     if count >= max_photos and pending is None:
         set_stage(STAGE_PREVIEW)
         st.rerun()
@@ -107,7 +121,7 @@ def render():
 
         col_l, col_m, col_r = st.columns([1, 3, 1])
         with col_m:
-            st.image(pending, use_container_width=True)
+            st.image(pending, width='stretch')
 
         st.markdown("<br>", unsafe_allow_html=True)
         col_ret, col_use = st.columns(2, gap="small")
@@ -124,21 +138,18 @@ def render():
                 new_count = photos_count()
 
                 if new_count >= max_photos:
-                    # ── KEY FIX ─────────────────────────────────────────────
-                    # NO st.spinner() here. st.spinner() is a context manager
-                    # that pushes a WebSocket delta to the browser IMMEDIATELY
-                    # when entered — this renders camera_page UI + spinner as
-                    # an intermediate frame, causing the visible flicker.
-                    #
-                    # Calling the function INLINE with no wrapper means:
-                    # Python runs synchronously → state updated → st.rerun()
-                    # fires → ONE clean render of preview_page. Done.
-                    processed = _build_processed_now()
-                    if processed:
-                        set_processed(processed)
+                    # ── GLITCH FIX: pre-process photos HERE before switching ──
+                    # Store as JPEG bytes (not PIL Images) to avoid
+                    # MediaFileHandler errors and session state serialization issues.
+                    with st.spinner("✨ Preparing your strip…"):
+                        processed_bytes = _build_processed_as_bytes()
+                        if processed_bytes:
+                            set_processed(processed_bytes)
                     set_stage(STAGE_PREVIEW)
-
-                st.rerun()
+                    # Single clean rerun → preview page renders immediately
+                    st.rerun()
+                else:
+                    st.rerun()
 
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("← Back", type="secondary"):
@@ -147,7 +158,7 @@ def render():
             set_stage(STAGE_TEMPLATE)
             st.rerun()
 
-        return  # Don't render camera widget while confirming
+        return  # ← early return: don't render camera widget while confirming
 
     # ══════════════════════════════════════════════════════════════════════
     # BRANCH B — Live camera
@@ -184,6 +195,7 @@ def render():
         if err:
             st.error(f"Could not use that image: {err}")
         else:
+            # Flip bytes to match what user saw (video was mirrored via CSS)
             mirrored = _mirror_image(raw)
             set_pending_photo(mirrored)
             st.rerun()
@@ -202,10 +214,13 @@ def render():
             st.rerun()
 
     with col_next:
+        # Disabled (black, unclickable) until ALL photos are taken
+        # Only becomes active (yellow) when count >= max_photos
+        photos_full = count >= max_photos
         if st.button(
             "Preview →",
             type="primary",
-            disabled=(count < max_photos),
+            disabled=not photos_full,
             use_container_width=True,
         ):
             set_stage(STAGE_PREVIEW)

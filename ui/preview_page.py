@@ -1,12 +1,20 @@
 """
 Stage 3 — Preview & customise.
 
-Photos may already be pre-processed (done in camera_page to avoid glitch).
-If not (e.g. user came back to change filter/sticker), rebuild them.
+Photos may already be pre-processed as JPEG bytes (stored by camera_page
+to avoid the flicker/MediaFileHandler glitch). If not (e.g. user came back
+to change filter/sticker), rebuild them.
+
+Key change: processed photos are now stored as JPEG bytes in session state,
+NOT as PIL Image objects. PIL Images are not reliably serializable across
+Streamlit reruns and cause MediaFileHandler missing-file errors.
+
+We convert bytes → PIL only when we actually need to compose the strip.
 """
 
 import io
 import streamlit as st
+from PIL import Image
 
 from config.settings import (
     FILTERS, STICKERS, STICKER_MAP, FRAME_MAP,
@@ -25,7 +33,8 @@ from core.compositor import compose_strip
 from core.exporter import export_jpg, export_pdf
 
 
-def _build_processed_photos() -> list:
+def _build_processed_bytes() -> list:
+    """Build processed photos and return as list of JPEG bytes."""
     filter_key  = get_filter()
     sticker_cfg = STICKER_MAP.get(get_sticker())
     result = []
@@ -36,30 +45,52 @@ def _build_processed_photos() -> list:
         img = apply_filter(img, filter_key)
         if sticker_cfg and sticker_cfg.key != "none":
             img = apply_sticker(img, sticker_cfg)
-        result.append(img)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=95, subsampling=0)
+        result.append(buf.getvalue())
     return result
 
 
-def _strip_preview_bytes(processed: list) -> bytes:
+def _bytes_to_pil(processed_bytes: list) -> list:
+    """Convert list of JPEG bytes back to PIL Images for compositing."""
+    result = []
+    for b in processed_bytes:
+        try:
+            img = Image.open(io.BytesIO(b))
+            img.load()
+            result.append(img.convert("RGB"))
+        except Exception:
+            pass
+    return result
+
+
+def _strip_preview_bytes(processed_bytes: list) -> bytes:
+    pil_images = _bytes_to_pil(processed_bytes)
     frame_cfg  = FRAME_MAP[get_frame()]
     layout_cfg = get_layout()
-    strip      = compose_strip(processed, frame_cfg, layout=layout_cfg)
+    strip      = compose_strip(pil_images, frame_cfg, layout=layout_cfg)
     buf        = io.BytesIO()
     strip.save(buf, format="JPEG", quality=92, subsampling=0)
     return buf.getvalue()
 
 
 def render():
-    # If photos were pre-processed by camera_page (no-glitch path), use them.
-    # If not (e.g. user changed filter), rebuild.
-    processed = get_processed()
-    if not processed:
-        with st.spinner("Applying effects…"):
-            built = _build_processed_photos()
-            set_processed(built)
-            processed = built
+    # Processed photos are stored as JPEG bytes (not PIL Images).
+    # If missing or empty, rebuild from raw photos.
+    processed_bytes = get_processed()
 
-    if not processed:
+    # Validate that stored data is actually bytes (not stale PIL objects)
+    if processed_bytes and not isinstance(processed_bytes[0], (bytes, bytearray)):
+        processed_bytes = []
+        set_processed([])
+
+    if not processed_bytes:
+        with st.spinner("Applying effects…"):
+            built = _build_processed_bytes()
+            set_processed(built)
+            processed_bytes = built
+
+    if not processed_bytes:
         st.error("No valid photos found. Please retake your shots.")
         if st.button("← Retake", type="secondary"):
             clear_photos()
@@ -74,12 +105,16 @@ def render():
     with col_ctrl:
         # --- Photo thumbnails ---
         st.markdown('<p class="snap-section">Your Photos</p>', unsafe_allow_html=True)
-        n_cols  = min(4, len(processed))
+        n_cols  = min(4, len(processed_bytes))
         th_cols = st.columns(n_cols)
-        for i, img in enumerate(processed):
-            th_cols[i % n_cols].image(
-                generate_thumbnail(img, width=120), use_container_width=True
-            )
+        for i, img_bytes in enumerate(processed_bytes):
+            # Open from bytes for thumbnail — this is fine, it's immediate
+            try:
+                img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                thumb = generate_thumbnail(img, width=120)
+                th_cols[i % n_cols].image(thumb, width='stretch')
+            except Exception:
+                pass
 
         st.markdown("---")
 
@@ -169,27 +204,28 @@ def render():
                 st.rerun()
         with col_gen:
             if st.button("Generate Strip →", type="primary", use_container_width=True):
-                _generate_strip(processed)
+                _generate_strip(processed_bytes)
 
     # ── Live strip preview ──────────────────────────────────────────────────
     with col_preview:
         st.markdown('<p class="snap-section">Preview</p>', unsafe_allow_html=True)
         try:
             st.image(
-                _strip_preview_bytes(processed),
-                use_container_width=True,
+                _strip_preview_bytes(processed_bytes),
+                width='stretch',
                 caption=f"{FRAME_MAP[get_frame()].label} · {layout_cfg.cols}×{layout_cfg.rows}",
             )
         except Exception as exc:
             st.warning(f"Preview unavailable: {exc}")
 
 
-def _generate_strip(photos: list):
+def _generate_strip(processed_bytes: list):
+    pil_images = _bytes_to_pil(processed_bytes)
     frame_cfg  = FRAME_MAP[get_frame()]
     layout_cfg = get_layout()
     with st.spinner("Composing your HD strip…"):
         try:
-            strip = compose_strip(photos, frame_cfg, layout=layout_cfg)
+            strip = compose_strip(pil_images, frame_cfg, layout=layout_cfg)
             set_strip_bytes(export_jpg(strip))
             set_strip_pdf(export_pdf(strip))
             set_stage(STAGE_DOWNLOAD)

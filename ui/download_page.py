@@ -28,7 +28,7 @@ def render():
     # Display the strip centred
     col_l, col_m, col_r = st.columns([1, 2, 1])
     with col_m:
-        st.image(jpg, use_container_width=True, caption="Your strip is ready!")
+        st.image(jpg, width='stretch', caption="Your strip is ready!")
 
     st.markdown("---")
     st.markdown("**Download**")
