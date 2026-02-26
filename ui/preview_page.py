@@ -4,6 +4,7 @@ Stage 3 — Preview & customise.
 
 import io
 import streamlit as st
+from PIL import Image
 
 from config.settings import (
     FILTERS, STICKERS, STICKER_MAP, FRAME_MAP,
@@ -20,6 +21,25 @@ from core.filters import apply_filter, generate_thumbnail
 from core.stickers import apply_sticker
 from core.compositor import compose_strip
 from core.exporter import export_jpg, export_pdf
+
+
+def _bytes_to_pil(processed: list) -> list:
+    """
+    If session state contains JPEG bytes (from new camera_page), convert to PIL.
+    If already PIL objects (old session), return as-is.
+    """
+    result = []
+    for item in processed:
+        if isinstance(item, (bytes, bytearray)):
+            try:
+                img = Image.open(io.BytesIO(item))
+                img.load()
+                result.append(img.convert("RGB"))
+            except Exception:
+                pass
+        else:
+            result.append(item)
+    return result
 
 
 def _build_processed_photos() -> list:
@@ -48,6 +68,11 @@ def _strip_preview_bytes(processed: list) -> bytes:
 
 def render():
     processed = get_processed()
+
+    # Convert bytes → PIL if camera_page stored bytes (new camera_page compat)
+    if processed:
+        processed = _bytes_to_pil(processed)
+
     if not processed:
         with st.spinner("Applying effects…"):
             built = _build_processed_photos()
@@ -71,7 +96,7 @@ def render():
         th_cols  = st.columns(n_cols)
         for i, img in enumerate(processed):
             th_cols[i % n_cols].image(
-                generate_thumbnail(img, width=100), use_container_width=True
+                generate_thumbnail(img, width=100), width='stretch'
             )
 
         st.markdown("---")
@@ -140,13 +165,13 @@ def render():
             if st.button("Generate Strip →", type="primary", use_container_width=True):
                 _generate_strip(processed)
 
-    # ── Live strip preview ──────────────────────────────────────────────────
+    # Live strip preview
     with col_preview:
         st.markdown('<p class="snap-section">Preview</p>', unsafe_allow_html=True)
         try:
             st.image(
                 _strip_preview_bytes(processed),
-                use_container_width=True,
+                width='stretch',
                 caption=f"{FRAME_MAP[get_frame()].label} · {layout_cfg.cols}×{layout_cfg.rows}",
             )
         except Exception as exc:
