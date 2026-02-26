@@ -1,6 +1,8 @@
 """
 Stage 3 — Preview & customise.
-Supports the expanded filter set with categorized display.
+
+Photos may already be pre-processed (done in camera_page to avoid glitch).
+If not (e.g. user came back to change filter/sticker), rebuild them.
 """
 
 import io
@@ -26,7 +28,7 @@ from core.exporter import export_jpg, export_pdf
 def _build_processed_photos() -> list:
     filter_key  = get_filter()
     sticker_cfg = STICKER_MAP.get(get_sticker())
-    result      = []
+    result = []
     for raw in get_photos():
         img = safe_open_image(raw)
         if img is None:
@@ -43,12 +45,13 @@ def _strip_preview_bytes(processed: list) -> bytes:
     layout_cfg = get_layout()
     strip      = compose_strip(processed, frame_cfg, layout=layout_cfg)
     buf        = io.BytesIO()
-    # Use high quality for the live preview too
     strip.save(buf, format="JPEG", quality=92, subsampling=0)
     return buf.getvalue()
 
 
 def render():
+    # If photos were pre-processed by camera_page (no-glitch path), use them.
+    # If not (e.g. user changed filter), rebuild.
     processed = get_processed()
     if not processed:
         with st.spinner("Applying effects…"):
@@ -59,6 +62,8 @@ def render():
     if not processed:
         st.error("No valid photos found. Please retake your shots.")
         if st.button("← Retake", type="secondary"):
+            clear_photos()
+            set_processed([])
             set_stage(STAGE_CAPTURE)
             st.rerun()
         return
@@ -69,8 +74,8 @@ def render():
     with col_ctrl:
         # --- Photo thumbnails ---
         st.markdown('<p class="snap-section">Your Photos</p>', unsafe_allow_html=True)
-        n_cols   = min(4, len(processed))
-        th_cols  = st.columns(n_cols)
+        n_cols  = min(4, len(processed))
+        th_cols = st.columns(n_cols)
         for i, img in enumerate(processed):
             th_cols[i % n_cols].image(
                 generate_thumbnail(img, width=120), use_container_width=True
@@ -78,48 +83,43 @@ def render():
 
         st.markdown("---")
 
-        # --- Filter (expanded, grouped) ---
+        # --- Filter (split into Classic + Aesthetic groups) ---
         st.markdown("**Filter**")
         current_filter = get_filter()
 
-        # Split into original and new
-        original_filters = [f for f in FILTERS if f.key in
-                            ["none","bw","sepia","retro","cool","vivid","soft","warm","fade"]]
-        aesthetic_filters = [f for f in FILTERS if f.key not in
-                             ["none","bw","sepia","retro","cool","vivid","soft","warm","fade"]]
+        CLASSIC_KEYS   = {"none","bw","sepia","retro","cool","vivid","soft","warm","fade"}
+        classic_list   = [f for f in FILTERS if f.key in CLASSIC_KEYS]
+        aesthetic_list = [f for f in FILTERS if f.key not in CLASSIC_KEYS]
 
         st.caption("Classic")
-        filter_choice = st.radio(
+        classic_choice = st.radio(
             "filter_classic",
-            options=[f.key for f in original_filters],
+            options=[f.key for f in classic_list],
             format_func=lambda k: next(f.label for f in FILTERS if f.key == k),
-            index=next((i for i, f in enumerate(original_filters) if f.key == current_filter), 0),
+            index=next((i for i,f in enumerate(classic_list) if f.key == current_filter), 0),
             horizontal=True,
             label_visibility="collapsed",
         )
 
         st.caption("✨ Aesthetic")
-        filter_choice2 = st.radio(
+        aesthetic_choice = st.radio(
             "filter_aesthetic",
-            options=[f.key for f in aesthetic_filters],
+            options=[f.key for f in aesthetic_list],
             format_func=lambda k: next(f.label for f in FILTERS if f.key == k),
-            index=next((i for i, f in enumerate(aesthetic_filters) if f.key == current_filter), 0),
+            index=next((i for i,f in enumerate(aesthetic_list) if f.key == current_filter), 0),
             horizontal=True,
             label_visibility="collapsed",
         )
 
-        # Determine which was changed
-        active_filter = current_filter
-        if filter_choice != current_filter and filter_choice in [f.key for f in original_filters]:
-            # User clicked in classic section
-            if current_filter not in [f.key for f in original_filters] or filter_choice != current_filter:
-                active_filter = filter_choice
-        if filter_choice2 != current_filter and filter_choice2 in [f.key for f in aesthetic_filters]:
-            if current_filter not in [f.key for f in aesthetic_filters] or filter_choice2 != current_filter:
-                active_filter = filter_choice2
+        # Detect which group the user just changed
+        new_filter = current_filter
+        if classic_choice != current_filter and classic_choice in CLASSIC_KEYS:
+            new_filter = classic_choice
+        if aesthetic_choice != current_filter and aesthetic_choice not in CLASSIC_KEYS:
+            new_filter = aesthetic_choice
 
-        if active_filter != current_filter:
-            set_filter(active_filter)
+        if new_filter != current_filter:
+            set_filter(new_filter)
             set_processed([])
             st.rerun()
 
@@ -132,7 +132,7 @@ def render():
             "sticker_select",
             options=[s.key for s in STICKERS],
             format_func=lambda k: next(s.label for s in STICKERS if s.key == k),
-            index=next(i for i, s in enumerate(STICKERS) if s.key == current_sticker),
+            index=next(i for i,s in enumerate(STICKERS) if s.key == current_sticker),
             horizontal=True,
             label_visibility="collapsed",
         )
