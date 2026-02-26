@@ -112,11 +112,11 @@ _PAGE_CSS = """<style>
 
 # Group frames into named categories for compact tabbed display
 _FRAME_GROUPS = {
-    "🤍 Classic":   ["classic", "film", "vintage", "gold_foil", "black_gold"],
-    "🌸 Cute":      ["pink_heart", "garden", "cherry_blossom", "sakura", "lavender",
+    "Classic":   ["classic", "film", "vintage", "gold_foil", "black_gold"],
+    "Cute":      ["pink_heart", "garden", "cherry_blossom", "sakura", "lavender",
                      "pastel_dream", "rose_gold", "mint_fresh", "bows"],
-    "🌊 Aesthetic": ["blue_sky", "ocean", "ice", "autumn", "warm_sunset"],
-    "✨ Dark":      ["neon", "midnight", "galaxy", "electric", "purple_rain"],
+    "Aesthetic": ["blue_sky", "ocean", "ice", "autumn", "warm_sunset"],
+    "Dark":      ["neon", "midnight", "galaxy", "electric", "purple_rain"],
 }
 
 
