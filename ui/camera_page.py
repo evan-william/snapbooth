@@ -1,143 +1,139 @@
 """
-Sticker overlay — draws geometric shapes directly via PIL.
+Stage 2 — Camera capture with freeze-frame confirmation.
 
-No font/unicode dependency. Uses PIL's polygon/ellipse drawing so it works
-on every platform regardless of installed fonts.
+Flow per shot:
+  1. Camera widget shown → user clicks shutter
+  2. Frame is IMMEDIATELY frozen and stored as pending_photo
+  3. Camera hides, frozen preview shown
+  4. User clicks "Use this photo" → saved, move to next shot
+     OR "Retake" → discard, camera shown again
 """
 
-import math
-import logging
-from typing import List, Tuple
+import io
+import streamlit as st
+from PIL import Image
 
-from PIL import Image, ImageDraw
-
-from config.settings import StickerConfig
-
-logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Shape drawers — each takes (draw, cx, cy, size, color)
-# ---------------------------------------------------------------------------
-
-def _draw_heart(draw: ImageDraw.ImageDraw, cx: int, cy: int,
-                size: int, color: Tuple):
-    """Approximate heart from two circles + a triangle."""
-    r = size // 2
-    # Left circle
-    draw.ellipse([cx - r, cy - r, cx, cy], fill=color)
-    # Right circle
-    draw.ellipse([cx, cy - r, cx + r, cy], fill=color)
-    # Bottom triangle
-    draw.polygon([(cx - r, cy), (cx + r, cy), (cx, cy + int(r * 1.2))], fill=color)
+from config.settings import MAX_PHOTOS, MIN_PHOTOS, STAGE_PREVIEW, STAGE_TEMPLATE
+from core.session import (
+    get_photos, add_photo, photos_count, photos_remaining,
+    set_stage, clear_photos,
+    get_pending_photo, set_pending_photo,
+)
+from core.validation import validate_image_bytes
 
 
-def _draw_star(draw: ImageDraw.ImageDraw, cx: int, cy: int,
-               size: int, color: Tuple):
-    """5-pointed star polygon."""
-    outer = size
-    inner = size // 2
-    points = []
-    for i in range(10):
-        angle = math.radians(i * 36 - 90)
-        r = outer if i % 2 == 0 else inner
-        points.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
-    draw.polygon(points, fill=color)
+def render():
+    count = photos_count()
+
+    # Auto-advance when quota full
+    if count >= MAX_PHOTOS:
+        set_pending_photo(None)
+        set_stage(STAGE_PREVIEW)
+        st.rerun()
+        return
+
+    st.markdown(
+        f'<div class="photo-counter">Shot {count + 1} of {MAX_PHOTOS}</div>',
+        unsafe_allow_html=True,
+    )
+
+    pending = get_pending_photo()
+
+    if pending is not None:
+        # ── Freeze-frame confirmation ─────────────────────────────────────
+        st.markdown(
+            '<p class="snap-section">Use this photo?</p>',
+            unsafe_allow_html=True,
+        )
+
+        # Show the frozen frame centred
+        col_l, col_m, col_r = st.columns([1, 3, 1])
+        with col_m:
+            st.image(pending, use_container_width=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_ret, col_use = st.columns(2, gap="small")
+
+        with col_ret:
+            if st.button("↩ Retake", type="secondary", use_container_width=True):
+                set_pending_photo(None)
+                st.rerun()
+
+        with col_use:
+            if st.button("✓ Use this photo", type="primary", use_container_width=True):
+                add_photo(pending)
+                set_pending_photo(None)
+                new_count = photos_count()
+                if new_count >= MAX_PHOTOS:
+                    set_stage(STAGE_PREVIEW)
+                st.rerun()
+
+    else:
+        # ── Live camera ───────────────────────────────────────────────────
+        st.markdown(
+            f'<p class="snap-section">Take Photo {count + 1}</p>',
+            unsafe_allow_html=True,
+        )
+
+        # Key changes per shot so the widget is always fresh
+        camera_img = st.camera_input(
+            label="Click the camera button to capture",
+            key=f"cam_{count}",
+        )
+
+        if camera_img is not None:
+            raw = camera_img.getvalue()
+            err = validate_image_bytes(raw)
+            if err:
+                st.error(f"Could not use that image: {err}")
+            else:
+                # Freeze immediately — stop the live feed before user moves
+                set_pending_photo(raw)
+                st.rerun()
+
+        _render_progress_dots(count, MAX_PHOTOS)
+
+    # ── Navigation ───────────────────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_back, col_mid, col_next = st.columns([1, 2, 1])
+
+    with col_back:
+        if st.button("← Back", type="secondary"):
+            clear_photos()
+            set_pending_photo(None)
+            set_stage(STAGE_TEMPLATE)
+            st.rerun()
+
+    with col_next:
+        can_proceed = count >= MIN_PHOTOS and pending is None
+        if st.button(
+            "Preview →",
+            type="primary",
+            disabled=not can_proceed,
+            use_container_width=True,
+        ):
+            set_stage(STAGE_PREVIEW)
+            st.rerun()
+
+    if count > 0 and count < MIN_PHOTOS and pending is None:
+        st.caption(f"Take at least {MIN_PHOTOS} photos to continue.")
 
 
-def _draw_flower(draw: ImageDraw.ImageDraw, cx: int, cy: int,
-                 size: int, color: Tuple):
-    """5 petal circles around a centre."""
-    petal_r = size // 3
-    for i in range(5):
-        angle = math.radians(i * 72)
-        px = int(cx + (size - petal_r) * math.cos(angle))
-        py = int(cy + (size - petal_r) * math.sin(angle))
-        draw.ellipse([px - petal_r, py - petal_r, px + petal_r, py + petal_r],
-                     fill=color)
-    # Centre
-    draw.ellipse([cx - petal_r, cy - petal_r, cx + petal_r, cy + petal_r],
-                 fill=color)
-
-
-def _draw_sparkle(draw: ImageDraw.ImageDraw, cx: int, cy: int,
-                  size: int, color: Tuple):
-    """4-pointed sparkle (thin cross + diagonal cross)."""
-    s = size
-    t = max(2, size // 5)  # thickness
-    # Horizontal
-    draw.rectangle([cx - s, cy - t, cx + s, cy + t], fill=color)
-    # Vertical
-    draw.rectangle([cx - t, cy - s, cx + t, cy + s], fill=color)
-    # Diagonals (thinner)
-    td = max(1, t // 2)
-    ds = int(s * 0.6)
-    points_d1 = [(cx - ds - td, cy - ds), (cx - ds + td, cy - ds - td),
-                 (cx + ds + td, cy + ds), (cx + ds - td, cy + ds + td)]
-    draw.polygon(points_d1, fill=color)
-    points_d2 = [(cx + ds - td, cy - ds), (cx + ds + td, cy - ds + td),
-                 (cx - ds + td, cy + ds), (cx - ds - td, cy + ds - td)]
-    draw.polygon(points_d2, fill=color)
-
-
-def _draw_clover(draw: ImageDraw.ImageDraw, cx: int, cy: int,
-                 size: int, color: Tuple):
-    """4-leaf clover: 4 circles in cardinal directions."""
-    r = size // 2
-    offsets = [(0, -r), (r, 0), (0, r), (-r, 0)]
-    for dx, dy in offsets:
-        lx, ly = cx + dx - r, cy + dy - r
-        draw.ellipse([lx, ly, lx + 2*r, ly + 2*r], fill=color)
-
-
-# Sticker key → (shape_fn, per-photo count, scatter positions as fractions of w/h)
-_STICKER_SHAPES = {
-    "hearts":   _draw_heart,
-    "stars":    _draw_star,
-    "flowers":  _draw_flower,
-    "sparkles": _draw_sparkle,
-    "clovers":  _draw_clover,
-}
-
-# Where to place sticker instances on the photo (as fraction: (x_frac, y_frac))
-_POSITIONS = [
-    (0.08, 0.10),   # top-left
-    (0.92, 0.10),   # top-right
-    (0.08, 0.88),   # bottom-left
-    (0.92, 0.88),   # bottom-right
-    (0.50, 0.07),   # top-centre
-    (0.50, 0.92),   # bottom-centre
-]
-
-
-def apply_sticker(img: Image.Image, sticker: StickerConfig) -> Image.Image:
-    """
-    Draw sticker shapes at fixed corner/edge positions on the photo.
-    Always returns a copy in RGB mode.
-    """
-    if not sticker or sticker.key == "none":
-        return img.copy()
-
-    draw_fn = _STICKER_SHAPES.get(sticker.key)
-    if draw_fn is None:
-        return img.copy()
-
-    out  = img.copy().convert("RGB")
-    draw = ImageDraw.Draw(out)
-    w, h = out.size
-
-    size  = max(10, min(w, h) // 12)
-    color = sticker.color
-
-    # Draw at first 4 (or 6 for dense stickers) positions
-    n_positions = min(len(_POSITIONS), 6)
-    for i in range(n_positions):
-        xf, yf = _POSITIONS[i]
-        cx = int(xf * w)
-        cy = int(yf * h)
-        try:
-            draw_fn(draw, cx, cy, size, color)
-        except Exception as exc:
-            logger.debug("Sticker draw error at pos %d: %s", i, exc)
-
-    return out
+def _render_progress_dots(done: int, total: int):
+    dots_html = '<div style="display:flex;gap:6px;justify-content:center;margin-top:1rem;">'
+    for i in range(total):
+        if i < done:
+            color = "#e0ff60"
+        elif i == done:
+            dots_html += (
+                '<div style="width:10px;height:10px;border-radius:50%;'
+                'background:#555;animation:pulse 1s infinite;"></div>'
+            )
+            continue
+        else:
+            color = "#333"
+        dots_html += (
+            f'<div style="width:10px;height:10px;border-radius:50%;background:{color};"></div>'
+        )
+    dots_html += "</div>"
+    st.markdown(dots_html, unsafe_allow_html=True)
