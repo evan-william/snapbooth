@@ -7,9 +7,15 @@ Flow per shot:
   3. Camera hides, frozen preview shown
   4. User clicks "Use this photo" → saved, move to next shot
      OR "Retake" → discard, camera shown again
+
+FIX: Browser mirrors webcam preview (scaleX(-1) CSS). The captured JPEG
+     is NOT mirrored by the browser, so we must flip it in Python to match
+     what the user saw in the viewfinder.
 """
 
+import io
 import streamlit as st
+from PIL import Image
 
 from config.settings import STAGE_PREVIEW, STAGE_TEMPLATE
 from core.session import (
@@ -19,6 +25,21 @@ from core.session import (
     get_max_photos, get_min_photos, get_layout,
 )
 from core.validation import validate_image_bytes
+
+
+def _mirror_image(data: bytes) -> bytes:
+    """
+    Horizontally flip the captured JPEG so the result matches the
+    mirrored preview the user saw in the camera viewfinder.
+    """
+    try:
+        img = Image.open(io.BytesIO(data))
+        flipped = img.transpose(Image.FLIP_LEFT_RIGHT)
+        buf = io.BytesIO()
+        flipped.save(buf, format="JPEG", quality=97, optimize=True)
+        return buf.getvalue()
+    except Exception:
+        return data  # fallback: return original if something goes wrong
 
 
 def render():
@@ -73,7 +94,6 @@ def render():
             unsafe_allow_html=True,
         )
 
-        # Camera permission helper — shown above the widget
         st.markdown(
             '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;'
             'padding:10px 14px;margin-bottom:10px;font-size:0.78rem;color:#888;">'
@@ -84,7 +104,7 @@ def render():
             unsafe_allow_html=True,
         )
 
-        # Un-flip camera preview — browsers mirror webcam, this reverses it
+        # Mirror the live preview so it feels like a selfie camera
         st.markdown(
             """<style>
             video[data-testid="stCameraInputCamera"],
@@ -112,7 +132,9 @@ def render():
             if err:
                 st.error(f"Could not use that image: {err}")
             else:
-                set_pending_photo(raw)
+                # ✅ FIX: flip the captured image to match what user saw in the mirrored preview
+                mirrored = _mirror_image(raw)
+                set_pending_photo(mirrored)
                 st.rerun()
 
         _render_progress_dots(count, max_photos)
@@ -145,9 +167,7 @@ def render():
 
 
 def _render_progress_dots(done: int, total: int):
-    # Cap displayed dots at 12 for very large layouts, show number instead
     if total > 12:
-        pct = int(done / total * 100)
         st.markdown(
             f'<div style="text-align:center;margin-top:1rem;color:#888;font-size:0.8rem;">'
             f'{done} / {total} photos taken</div>',

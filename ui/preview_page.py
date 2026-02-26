@@ -1,5 +1,6 @@
 """
 Stage 3 — Preview & customise.
+Supports the expanded filter set with categorized display.
 """
 
 import io
@@ -42,7 +43,8 @@ def _strip_preview_bytes(processed: list) -> bytes:
     layout_cfg = get_layout()
     strip      = compose_strip(processed, frame_cfg, layout=layout_cfg)
     buf        = io.BytesIO()
-    strip.save(buf, format="JPEG", quality=85)
+    # Use high quality for the live preview too
+    strip.save(buf, format="JPEG", quality=92, subsampling=0)
     return buf.getvalue()
 
 
@@ -71,24 +73,53 @@ def render():
         th_cols  = st.columns(n_cols)
         for i, img in enumerate(processed):
             th_cols[i % n_cols].image(
-                generate_thumbnail(img, width=100), use_container_width=True
+                generate_thumbnail(img, width=120), use_container_width=True
             )
 
         st.markdown("---")
 
-        # --- Filter ---
+        # --- Filter (expanded, grouped) ---
         st.markdown("**Filter**")
         current_filter = get_filter()
-        filter_choice  = st.radio(
-            "filter_select",
-            options=[f.key for f in FILTERS],
+
+        # Split into original and new
+        original_filters = [f for f in FILTERS if f.key in
+                            ["none","bw","sepia","retro","cool","vivid","soft","warm","fade"]]
+        aesthetic_filters = [f for f in FILTERS if f.key not in
+                             ["none","bw","sepia","retro","cool","vivid","soft","warm","fade"]]
+
+        st.caption("Classic")
+        filter_choice = st.radio(
+            "filter_classic",
+            options=[f.key for f in original_filters],
             format_func=lambda k: next(f.label for f in FILTERS if f.key == k),
-            index=next(i for i, f in enumerate(FILTERS) if f.key == current_filter),
+            index=next((i for i, f in enumerate(original_filters) if f.key == current_filter), 0),
             horizontal=True,
             label_visibility="collapsed",
         )
-        if filter_choice != current_filter:
-            set_filter(filter_choice)
+
+        st.caption("✨ Aesthetic")
+        filter_choice2 = st.radio(
+            "filter_aesthetic",
+            options=[f.key for f in aesthetic_filters],
+            format_func=lambda k: next(f.label for f in FILTERS if f.key == k),
+            index=next((i for i, f in enumerate(aesthetic_filters) if f.key == current_filter), 0),
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+
+        # Determine which was changed
+        active_filter = current_filter
+        if filter_choice != current_filter and filter_choice in [f.key for f in original_filters]:
+            # User clicked in classic section
+            if current_filter not in [f.key for f in original_filters] or filter_choice != current_filter:
+                active_filter = filter_choice
+        if filter_choice2 != current_filter and filter_choice2 in [f.key for f in aesthetic_filters]:
+            if current_filter not in [f.key for f in aesthetic_filters] or filter_choice2 != current_filter:
+                active_filter = filter_choice2
+
+        if active_filter != current_filter:
+            set_filter(active_filter)
             set_processed([])
             st.rerun()
 
@@ -156,7 +187,7 @@ def render():
 def _generate_strip(photos: list):
     frame_cfg  = FRAME_MAP[get_frame()]
     layout_cfg = get_layout()
-    with st.spinner("Composing your strip…"):
+    with st.spinner("Composing your HD strip…"):
         try:
             strip = compose_strip(photos, frame_cfg, layout=layout_cfg)
             set_strip_bytes(export_jpg(strip))

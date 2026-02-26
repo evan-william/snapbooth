@@ -33,10 +33,30 @@ def render():
     st.markdown("---")
     st.markdown("**Download**")
 
+    # Force black text on the primary (yellow) download button
+    st.markdown(
+        """<style>
+        [data-testid="stDownloadButton"] > button {
+            color: #111111 !important;
+            font-weight: 700 !important;
+        }
+        [data-testid="stDownloadButton"] > button[kind="primary"] {
+            background: #e0ff60 !important;
+            color: #111111 !important;
+            border: none !important;
+        }
+        [data-testid="stDownloadButton"] > button[kind="secondary"] {
+            color: #111111 !important;
+            border: 1px solid #555 !important;
+        }
+        </style>""",
+        unsafe_allow_html=True,
+    )
+
     col_jpg, col_pdf = st.columns(2)
     with col_jpg:
         st.download_button(
-            label="Download JPG",
+            label="⬇ Download JPG",
             data=jpg,
             file_name="snapbooth_strip.jpg",
             mime="image/jpeg",
@@ -47,7 +67,7 @@ def render():
     with col_pdf:
         if pdf:
             st.download_button(
-                label="Download PDF",
+                label="⬇ Download PDF",
                 data=pdf,
                 file_name="snapbooth_strip.pdf",
                 mime="application/pdf",

@@ -14,11 +14,11 @@ ALLOWED_MIME_MAGIC = {
 }
 
 # --- Output dimensions (per photo slot) ---
-SLOT_W         = 380   # width of each photo slot
-SLOT_H         = 285   # height of each photo slot
-STRIP_PADDING  = 12    # padding between/around photos
-STRIP_HEADER_H = 68
-STRIP_FOOTER_H = 44
+SLOT_W         = 480   # increased for HD output
+SLOT_H         = 360   # increased for HD output
+STRIP_PADDING  = 14    # padding between/around photos
+STRIP_HEADER_H = 80
+STRIP_FOOTER_H = 52
 
 # Backwards compat aliases
 STRIP_PHOTO_WIDTH  = SLOT_W
@@ -76,12 +76,11 @@ class FrameConfig:
     header_text_color: Tuple[int, int, int]
     deco_symbols:      List[str]            = field(default_factory=list)
     deco_color:        Tuple[int, int, int] = (200, 200, 200)
-    bg_color2:         Optional[Tuple[int, int, int]] = None   # for gradient strips
-    glow_color:        Optional[Tuple[int, int, int]] = None   # inner glow tint
+    bg_color2:         Optional[Tuple[int, int, int]] = None
+    glow_color:        Optional[Tuple[int, int, int]] = None
 
 
 FRAMES: List[FrameConfig] = [
-    # ── Originals ────────────────────────────────────────────────────────────
     FrameConfig(
         "classic", "Classic",
         border_color=(255, 255, 255), border_width=5,
@@ -130,7 +129,6 @@ FRAMES: List[FrameConfig] = [
         bg_color=(248, 244, 255), header_text_color=(130, 90, 180),
         deco_symbols=["✿", "✦", "♡", "✿", "✦", "♡"], deco_color=(180, 140, 210),
     ),
-    # ── New frames ───────────────────────────────────────────────────────────
     FrameConfig(
         "midnight", "Midnight",
         border_color=(80, 100, 200), border_width=6,
@@ -238,15 +236,31 @@ class FilterConfig:
     label: str
 
 FILTERS: List[FilterConfig] = [
-    FilterConfig("none",   "Original"),
-    FilterConfig("bw",     "B&W"),
-    FilterConfig("sepia",  "Sepia"),
-    FilterConfig("retro",  "Retro"),
-    FilterConfig("cool",   "Cool"),
-    FilterConfig("vivid",  "Vivid"),
-    FilterConfig("soft",   "Soft"),
-    FilterConfig("warm",   "Warm"),
-    FilterConfig("fade",   "Fade"),
+    # Original
+    FilterConfig("none",         "Original"),
+    FilterConfig("bw",           "B&W"),
+    FilterConfig("sepia",        "Sepia"),
+    FilterConfig("retro",        "Retro"),
+    FilterConfig("cool",         "Cool"),
+    FilterConfig("vivid",        "Vivid"),
+    FilterConfig("soft",         "Soft"),
+    FilterConfig("warm",         "Warm"),
+    FilterConfig("fade",         "Fade"),
+    # New aesthetic
+    FilterConfig("golden_hour",  "✨ Golden"),
+    FilterConfig("cherry",       "🌸 Cherry"),
+    FilterConfig("film",         "🎞️ Film"),
+    FilterConfig("neon_pop",     "⚡ Neon"),
+    FilterConfig("pastel",       "🍬 Pastel"),
+    FilterConfig("moody",        "🌑 Moody"),
+    FilterConfig("y2k",          "💿 Y2K"),
+    FilterConfig("matcha",       "🍵 Matcha"),
+    FilterConfig("lavender",     "💜 Lavender"),
+    FilterConfig("crisp",        "🔍 Crisp"),
+    FilterConfig("dusk",         "🌆 Dusk"),
+    FilterConfig("tokyo",        "🗼 Tokyo"),
+    FilterConfig("cotton_candy", "🩷 Candy"),
+    FilterConfig("polaroid",     "📷 Polaroid"),
 ]
 
 FILTER_MAP = {f.key: f for f in FILTERS}
@@ -259,7 +273,7 @@ class StickerConfig:
     key:    str
     label:  str
     color:  Tuple[int, int, int]
-    color2: Optional[Tuple[int, int, int]] = None   # accent color
+    color2: Optional[Tuple[int, int, int]] = None
 
 STICKERS: List[StickerConfig] = [
     StickerConfig("none",       "None",         (0,   0,   0)),
@@ -296,6 +310,6 @@ STAGE_CAPTURE  = "capture"
 STAGE_PREVIEW  = "preview"
 STAGE_DOWNLOAD = "download"
 
-# Legacy aliases (so existing code that imports MAX_PHOTOS still works)
+# Legacy aliases
 MAX_PHOTOS = LAYOUT_MAP[DEFAULT_LAYOUT].total
 MIN_PHOTOS = LAYOUT_MAP[DEFAULT_LAYOUT].min_photos

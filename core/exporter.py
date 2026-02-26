@@ -2,7 +2,7 @@
 Export the composed strip image to downloadable byte buffers.
 
 Outputs:
-  - High-quality JPEG (social share)
+  - High-quality JPEG (quality=96, subsampling=0 for maximum detail)
   - Print-ready PDF via ReportLab (centred on A4)
 
 Neither function writes to disk; everything stays in memory.
@@ -12,21 +12,27 @@ import io
 import logging
 from typing import Tuple
 
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 from config.settings import PDF_PAGE_W, PDF_PAGE_H
 
 logger = logging.getLogger(__name__)
 
 
-def export_jpg(strip: Image.Image, quality: int = 92) -> bytes:
+def export_jpg(strip: Image.Image, quality: int = 96) -> bytes:
     """
-    Encode the strip as a JPEG byte string.
-
-    quality=92 is a good balance between file size and visible detail.
+    Encode the strip as a maximum-quality JPEG byte string.
+    quality=96 + subsampling=0 preserves fine detail and sharp edges.
     """
     buf = io.BytesIO()
-    strip.convert("RGB").save(buf, format="JPEG", quality=quality, optimize=True)
+    # subsampling=0 → 4:4:4 chroma, no color blurring
+    strip.convert("RGB").save(
+        buf,
+        format="JPEG",
+        quality=quality,
+        subsampling=0,
+        optimize=True,
+    )
     return buf.getvalue()
 
 
@@ -34,7 +40,7 @@ def export_pdf(strip: Image.Image) -> bytes:
     """
     Render the strip centred on an A4 page and return the PDF as bytes.
     Uses ReportLab for generation; falls back to a JPEG-embedded PDF if
-    ReportLab is unavailable (rare but handled gracefully).
+    ReportLab is unavailable.
     """
     try:
         return _export_pdf_reportlab(strip)
@@ -51,9 +57,8 @@ def _export_pdf_reportlab(strip: Image.Image) -> bytes:
     buf = io.BytesIO()
     c = rl_canvas.Canvas(buf, pagesize=A4)
 
-    page_w, page_h = A4  # in points
+    page_w, page_h = A4
 
-    # Scale strip to fit the page with margins (15 pt each side)
     margin = 15
     available_w = page_w - 2 * margin
     available_h = page_h - 2 * margin
@@ -64,11 +69,10 @@ def _export_pdf_reportlab(strip: Image.Image) -> bytes:
     draw_w = img_w * scale
     draw_h = img_h * scale
 
-    # Centre on page
     x = (page_w - draw_w) / 2
     y = (page_h - draw_h) / 2
 
-    # ReportLab reads from a PIL-compatible buffer
+    # Save as PNG for lossless quality inside PDF
     img_buf = io.BytesIO()
     strip.convert("RGB").save(img_buf, format="PNG")
     img_buf.seek(0)
@@ -80,16 +84,12 @@ def _export_pdf_reportlab(strip: Image.Image) -> bytes:
 
 
 def _export_pdf_fallback(strip: Image.Image) -> bytes:
-    """
-    Minimal valid PDF that embeds a JPEG image.
-    Used only when ReportLab is missing.
-    """
+    """Minimal valid PDF that embeds a JPEG image."""
     jpeg_buf = io.BytesIO()
-    strip.convert("RGB").save(jpeg_buf, format="JPEG", quality=90)
+    strip.convert("RGB").save(jpeg_buf, format="JPEG", quality=96, subsampling=0)
     jpeg_bytes = jpeg_buf.getvalue()
 
     w, h = strip.size
-    # Scale to A4 points
     scale = min(PDF_PAGE_W / w, PDF_PAGE_H / h)
     dw = int(w * scale)
     dh = int(h * scale)
