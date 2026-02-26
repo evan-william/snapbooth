@@ -248,8 +248,8 @@ def _render_footer():
     st.markdown(
         """
         <div class="snap-footer">
-            <div class="snap-footer-name">Evan Wollian</div>
-            <div class="snap-footer-copy">© 2025 Evan Wollian · SnapBooth · All rights reserved</div>
+            <div class="snap-footer-name">Evan William</div>
+            <div class="snap-footer-copy">© 2026 Evan William · SnapBooth · All rights reserved</div>
         </div>
         """,
         unsafe_allow_html=True,
