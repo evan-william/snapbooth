@@ -37,7 +37,6 @@ def _build_processed_photos() -> list:
 
 
 def _strip_preview_bytes(processed: list) -> bytes:
-    """Render the current strip and return as JPEG bytes for display."""
     frame_cfg = FRAME_MAP[get_frame()]
     strip     = compose_strip(processed, frame_cfg)
     buf       = io.BytesIO()
@@ -46,7 +45,6 @@ def _strip_preview_bytes(processed: list) -> bytes:
 
 
 def render():
-    # Build processed images
     processed = get_processed()
     if not processed:
         with st.spinner("Applying effects…"):
@@ -61,11 +59,10 @@ def render():
             st.rerun()
         return
 
-    # ── Layout: left column = controls, right column = live strip preview ──
     col_ctrl, col_preview = st.columns([3, 2], gap="large")
 
     with col_ctrl:
-        # --- Photo row ---
+        # --- Photo thumbnails ---
         st.markdown('<p class="snap-section">Your Photos</p>', unsafe_allow_html=True)
         thumb_cols = st.columns(len(processed))
         for col, img in zip(thumb_cols, processed):
@@ -73,38 +70,39 @@ def render():
 
         st.markdown("---")
 
-        # --- Filter ---
+        # --- Filter — radio with clean labels, no wrapping ---
         st.markdown("**Filter**")
         current_filter = get_filter()
-        f_cols = st.columns(len(FILTERS))
-        for col, f in zip(f_cols, FILTERS):
-            if col.button(
-                f.label,
-                key=f"f_{f.key}",
-                type="primary" if f.key == current_filter else "secondary",
-                use_container_width=True,
-            ):
-                set_filter(f.key)
-                set_processed([])
-                st.rerun()
+        filter_choice = st.radio(
+            "filter_select",
+            options=[f.key for f in FILTERS],
+            format_func=lambda k: next(f.label for f in FILTERS if f.key == k),
+            index=next(i for i, f in enumerate(FILTERS) if f.key == current_filter),
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        if filter_choice != current_filter:
+            set_filter(filter_choice)
+            set_processed([])
+            st.rerun()
 
         st.markdown("")
 
-        # --- Sticker ---
+        # --- Sticker — radio with clean labels ---
         st.markdown("**Sticker**")
         current_sticker = get_sticker()
-        s_cols = st.columns(len(STICKERS))
-        for col, s in zip(s_cols, STICKERS):
-            label = s.label
-            if col.button(
-                label,
-                key=f"s_{s.key}",
-                type="primary" if s.key == current_sticker else "secondary",
-                use_container_width=True,
-            ):
-                set_sticker(s.key)
-                set_processed([])
-                st.rerun()
+        sticker_choice = st.radio(
+            "sticker_select",
+            options=[s.key for s in STICKERS],
+            format_func=lambda k: next(s.label for s in STICKERS if s.key == k),
+            index=next(i for i, s in enumerate(STICKERS) if s.key == current_sticker),
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        if sticker_choice != current_sticker:
+            set_sticker(sticker_choice)
+            set_processed([])
+            st.rerun()
 
         st.markdown("---")
 
@@ -112,18 +110,16 @@ def render():
         st.markdown("**Frame**")
         current_frame = get_frame()
         frame_keys    = list(FRAME_MAP.keys())
-        selected_idx  = frame_keys.index(current_frame) if current_frame in frame_keys else 0
-
-        choice = st.radio(
+        frame_choice  = st.radio(
             "frame_radio",
             options=frame_keys,
             format_func=lambda k: FRAME_MAP[k].label,
-            index=selected_idx,
+            index=frame_keys.index(current_frame) if current_frame in frame_keys else 0,
             horizontal=True,
             label_visibility="collapsed",
         )
-        if choice != current_frame:
-            set_frame(choice)
+        if frame_choice != current_frame:
+            set_frame(frame_choice)
             st.rerun()
 
         st.markdown("---")
@@ -139,12 +135,15 @@ def render():
             if st.button("Generate Strip →", type="primary", use_container_width=True):
                 _generate_strip(processed)
 
-    # ── Live strip preview ─────────────────────────────────────────────────
+    # ── Live strip preview ──────────────────────────────────────────────
     with col_preview:
         st.markdown('<p class="snap-section">Preview</p>', unsafe_allow_html=True)
         try:
-            preview_bytes = _strip_preview_bytes(processed)
-            st.image(preview_bytes, use_container_width=True, caption=f"Frame: {FRAME_MAP[get_frame()].label}")
+            st.image(
+                _strip_preview_bytes(processed),
+                use_container_width=True,
+                caption=f"Frame: {FRAME_MAP[get_frame()].label}",
+            )
         except Exception as exc:
             st.warning(f"Preview unavailable: {exc}")
 

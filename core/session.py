@@ -1,13 +1,10 @@
 """
 Centralised session-state helpers.
-
-All reads/writes to st.session_state go through these functions,
-which keeps the rest of the UI code clean and prevents key-name typos.
+All reads/writes to st.session_state go through these functions.
 """
 
 import streamlit as st
 from typing import Any, List, Optional
-from PIL.Image import Image
 
 from config.settings import (
     KEY_STAGE, KEY_FRAME, KEY_PHOTOS, KEY_FILTER,
@@ -15,25 +12,27 @@ from config.settings import (
     STAGE_TEMPLATE, MAX_PHOTOS,
 )
 
+KEY_PENDING_PHOTO = "pending_photo"   # frozen frame waiting for user confirmation
+
 
 def init_session():
-    """Ensure all required session keys exist with safe defaults."""
     defaults = {
-        KEY_STAGE:       STAGE_TEMPLATE,
-        KEY_FRAME:       "classic",
-        KEY_PHOTOS:      [],
-        KEY_FILTER:      "none",
-        KEY_STICKER:     "none",
-        KEY_PROCESSED:   [],
-        KEY_STRIP_BYTES: None,
-        KEY_STRIP_PDF:   None,
+        KEY_STAGE:          STAGE_TEMPLATE,
+        KEY_FRAME:          "classic",
+        KEY_PHOTOS:         [],
+        KEY_FILTER:         "none",
+        KEY_STICKER:        "none",
+        KEY_PROCESSED:      [],
+        KEY_STRIP_BYTES:    None,
+        KEY_STRIP_PDF:      None,
+        KEY_PENDING_PHOTO:  None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
 
-# --- Stage navigation -------------------------------------------------------
+# --- Stage ------------------------------------------------------------------
 
 def get_stage() -> str:
     return st.session_state[KEY_STAGE]
@@ -57,9 +56,8 @@ def get_photos() -> List[bytes]:
     return st.session_state[KEY_PHOTOS]
 
 def add_photo(data: bytes):
-    photos = st.session_state[KEY_PHOTOS]
-    if len(photos) < MAX_PHOTOS:
-        photos.append(data)
+    if len(st.session_state[KEY_PHOTOS]) < MAX_PHOTOS:
+        st.session_state[KEY_PHOTOS].append(data)
 
 def photos_remaining() -> int:
     return MAX_PHOTOS - len(st.session_state[KEY_PHOTOS])
@@ -71,13 +69,21 @@ def clear_photos():
     st.session_state[KEY_PHOTOS] = []
 
 
+# --- Pending photo (freeze-frame confirmation) ------------------------------
+
+def get_pending_photo() -> Optional[bytes]:
+    return st.session_state.get(KEY_PENDING_PHOTO)
+
+def set_pending_photo(data: Optional[bytes]):
+    st.session_state[KEY_PENDING_PHOTO] = data
+
+
 # --- Filter / sticker -------------------------------------------------------
 
 def get_filter() -> str:
     return st.session_state[KEY_FILTER]
 
 def set_filter(key: str):
-    # Changing filter invalidates cached processed images
     if st.session_state[KEY_FILTER] != key:
         st.session_state[KEY_FILTER] = key
         st.session_state[KEY_PROCESSED] = []
@@ -115,9 +121,10 @@ def set_strip_pdf(data: bytes):
 # --- Full reset -------------------------------------------------------------
 
 def reset_session():
-    """Clear everything and go back to the start."""
-    for key in [KEY_PHOTOS, KEY_PROCESSED, KEY_STRIP_BYTES, KEY_STRIP_PDF]:
-        st.session_state[key] = [] if key in (KEY_PHOTOS, KEY_PROCESSED) else None
+    for key in [KEY_PHOTOS, KEY_PROCESSED]:
+        st.session_state[key] = []
+    for key in [KEY_STRIP_BYTES, KEY_STRIP_PDF, KEY_PENDING_PHOTO]:
+        st.session_state[key] = None
     st.session_state[KEY_STAGE]   = STAGE_TEMPLATE
     st.session_state[KEY_FRAME]   = "classic"
     st.session_state[KEY_FILTER]  = "none"
