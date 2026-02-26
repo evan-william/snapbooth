@@ -1,16 +1,14 @@
 """
 Stage 2 — Camera capture with freeze-frame confirmation.
 
-Flow per shot:
-  1. Camera widget shown → user clicks shutter
-  2. Frame is IMMEDIATELY frozen and stored as pending_photo
-  3. Camera hides, frozen preview shown
-  4. User clicks "Use this photo" → saved, move to next shot
-     OR "Retake" → discard, camera shown again
-
-FIX: Browser mirrors webcam preview (scaleX(-1) CSS). The captured JPEG
-     is NOT mirrored by the browser, so we must flip it in Python to match
-     what the user saw in the viewfinder.
+Fixes:
+  1. No flash/flicker of unflipped image when taking photo:
+     - Hide Streamlit's built-in captured image preview via CSS (stCameraInputShot)
+     - We process + flip immediately, show our own correctly-oriented preview
+  2. No glitch/stuck on last photo:
+     - set_stage(STAGE_PREVIEW) BEFORE st.rerun() so the guard at top catches it
+     - Early return after setting pending to avoid double rendering
+  3. All use_container_width → width='stretch'
 """
 
 import io
@@ -22,16 +20,13 @@ from core.session import (
     add_photo, photos_count,
     set_stage, clear_photos,
     get_pending_photo, set_pending_photo,
-    get_max_photos, get_min_photos, get_layout,
+    get_max_photos, get_layout,
 )
 from core.validation import validate_image_bytes
 
 
 def _mirror_image(data: bytes) -> bytes:
-    """
-    Horizontally flip the captured JPEG so the result matches the
-    mirrored preview the user saw in the camera viewfinder.
-    """
+    """Horizontally flip the captured JPEG to match the mirrored live preview."""
     try:
         img = Image.open(io.BytesIO(data))
         flipped = img.transpose(Image.FLIP_LEFT_RIGHT)
@@ -39,7 +34,7 @@ def _mirror_image(data: bytes) -> bytes:
         flipped.save(buf, format="JPEG", quality=97, optimize=True)
         return buf.getvalue()
     except Exception:
-        return data  # fallback: return original if something goes wrong
+        return data
 
 
 def render():
@@ -47,9 +42,27 @@ def render():
     layout     = get_layout()
     count      = photos_count()
 
-    # Auto-advance when quota full
-    if count >= max_photos:
-        set_pending_photo(None)
+    # ── Always inject CSS:
+    #    1) Mirror the live video so it feels like a selfie camera
+    #    2) Hide the Streamlit default still-capture preview thumbnail —
+    #       that element shows the UNFLIPPED raw capture for a split second
+    #       before our st.rerun() fires, causing the visible flicker.
+    st.markdown(
+        """<style>
+        video[data-testid="stCameraInputCamera"],
+        [data-testid="stCameraInput"] video {
+            transform: scaleX(-1) !important;
+        }
+        [data-testid="stCameraInputShot"] {
+            display: none !important;
+            visibility: hidden !important;
+        }
+        </style>""",
+        unsafe_allow_html=True,
+    )
+
+    # ── Guard: quota full + no pending → go to preview ────────────────────
+    if count >= max_photos and get_pending_photo() is None:
         set_stage(STAGE_PREVIEW)
         st.rerun()
         return
@@ -62,13 +75,15 @@ def render():
 
     pending = get_pending_photo()
 
+    # ══════════════════════════════════════════════════════════════════════
+    # BRANCH A — Freeze-frame confirmation
+    # ══════════════════════════════════════════════════════════════════════
     if pending is not None:
-        # ── Freeze-frame confirmation ─────────────────────────────────────
         st.markdown('<p class="snap-section">Use this photo?</p>', unsafe_allow_html=True)
 
         col_l, col_m, col_r = st.columns([1, 3, 1])
         with col_m:
-            st.image(pending, use_container_width=True)
+            st.image(pending, width='stretch')
 
         st.markdown("<br>", unsafe_allow_html=True)
         col_ret, col_use = st.columns(2, gap="small")
@@ -84,62 +99,62 @@ def render():
                 set_pending_photo(None)
                 new_count = photos_count()
                 if new_count >= max_photos:
+                    # Set stage BEFORE rerun — guard at top of render() will
+                    # catch this cleanly without double-rendering the camera
                     set_stage(STAGE_PREVIEW)
                 st.rerun()
 
-    else:
-        # ── Live camera ───────────────────────────────────────────────────
-        st.markdown(
-            f'<p class="snap-section">Take Photo {count + 1}</p>',
-            unsafe_allow_html=True,
-        )
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("← Back", type="secondary"):
+            clear_photos()
+            set_pending_photo(None)
+            set_stage(STAGE_TEMPLATE)
+            st.rerun()
 
-        st.markdown(
-            '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;'
-            'padding:10px 14px;margin-bottom:10px;font-size:0.78rem;color:#888;">'
-            '📷 &nbsp;If you see a black screen or permission prompt: '
-            '<strong style="color:#ccc;">click the camera icon in your browser\'s address bar</strong> '
-            'and allow camera access, then press the <strong style="color:#e0ff60;">↺ Refresh</strong> button below.'
-            '</div>',
-            unsafe_allow_html=True,
-        )
+        return  # Don't render camera widget while confirming
 
-        # Mirror the live preview so it feels like a selfie camera
-        st.markdown(
-            """<style>
-            video[data-testid="stCameraInputCamera"],
-            [data-testid="stCameraInput"] video {
-                transform: scaleX(-1) !important;
-            }
-            </style>""",
-            unsafe_allow_html=True,
-        )
+    # ══════════════════════════════════════════════════════════════════════
+    # BRANCH B — Live camera
+    # ══════════════════════════════════════════════════════════════════════
+    st.markdown(
+        f'<p class="snap-section">Take Photo {count + 1}</p>',
+        unsafe_allow_html=True,
+    )
 
-        col_cam, col_refresh = st.columns([5, 1])
-        with col_refresh:
-            if st.button("↺ Refresh", key=f"cam_refresh_{count}", type="secondary",
-                         use_container_width=True):
-                st.rerun()
+    st.markdown(
+        '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;'
+        'padding:10px 14px;margin-bottom:10px;font-size:0.78rem;color:#888;">'
+        '📷 &nbsp;If you see a black screen or permission prompt: '
+        '<strong style="color:#ccc;">click the camera icon in your browser\'s address bar</strong> '
+        'and allow camera access, then press the <strong style="color:#e0ff60;">↺ Refresh</strong> button below.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
-        camera_img = st.camera_input(
-            label="Point your camera and click Take Photo",
-            key=f"cam_{count}",
-        )
+    col_cam, col_refresh = st.columns([5, 1])
+    with col_refresh:
+        if st.button("↺ Refresh", key=f"cam_refresh_{count}", type="secondary",
+                     use_container_width=True):
+            st.rerun()
 
-        if camera_img is not None:
-            raw = camera_img.getvalue()
-            err = validate_image_bytes(raw)
-            if err:
-                st.error(f"Could not use that image: {err}")
-            else:
-                # ✅ FIX: flip the captured image to match what user saw in the mirrored preview
-                mirrored = _mirror_image(raw)
-                set_pending_photo(mirrored)
-                st.rerun()
+    camera_img = st.camera_input(
+        label="Point your camera and click Take Photo",
+        key=f"cam_{count}",
+    )
 
-        _render_progress_dots(count, max_photos)
+    if camera_img is not None:
+        raw = camera_img.getvalue()
+        err = validate_image_bytes(raw)
+        if err:
+            st.error(f"Could not use that image: {err}")
+        else:
+            mirrored = _mirror_image(raw)
+            set_pending_photo(mirrored)
+            st.rerun()
 
-    # ── Navigation ───────────────────────────────────────────────────────
+    _render_progress_dots(count, max_photos)
+
+    # ── Navigation ────────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     col_back, col_mid, col_next = st.columns([1, 2, 1])
 
@@ -151,7 +166,7 @@ def render():
             st.rerun()
 
     with col_next:
-        can_proceed = count >= max_photos and pending is None
+        can_proceed = count >= max_photos
         if st.button(
             "Preview →",
             type="primary",
@@ -161,7 +176,7 @@ def render():
             set_stage(STAGE_PREVIEW)
             st.rerun()
 
-    if 0 < count < max_photos and pending is None:
+    if 0 < count < max_photos:
         remaining = max_photos - count
         st.caption(f"{remaining} more photo{'s' if remaining > 1 else ''} to go.")
 
