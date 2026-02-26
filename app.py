@@ -13,9 +13,10 @@ from config.settings import (
 )
 from core.session import init_session, get_stage
 from ui.styles import inject_css
+from ui.mobile_block import inject_mobile_block
 from ui import template_page, camera_page, preview_page, download_page
 
-# ── Page config (must be the first Streamlit call) ────────────────────────
+# ── Page config (must be the first Streamlit call) ─────────────────────────
 st.set_page_config(
     page_title="SnapBooth",
     page_icon="📸",
@@ -23,11 +24,14 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ── Global state + CSS ────────────────────────────────────────────────────
+# ── Global state + CSS ─────────────────────────────────────────────────────
 init_session()
 inject_css()
 
-# ── Header ────────────────────────────────────────────────────────────────
+# ── Mobile block (runs JS detection, shows overlay on phones/tablets) ──────
+inject_mobile_block()
+
+# ── Header ─────────────────────────────────────────────────────────────────
 st.markdown(
     """
     <div class="snap-header">
@@ -38,7 +42,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ── Stage breadcrumb ──────────────────────────────────────────────────────
+# ── Stage breadcrumb ────────────────────────────────────────────────────────
 _STAGES = [
     (STAGE_TEMPLATE, "Frame"),
     (STAGE_CAPTURE,  "Shoot"),
@@ -55,7 +59,7 @@ for i, (key, label) in enumerate(_STAGES):
 steps_html += "</div>"
 st.markdown(steps_html, unsafe_allow_html=True)
 
-# ── Route to active stage ─────────────────────────────────────────────────
+# ── Route to active stage ───────────────────────────────────────────────────
 if current_stage == STAGE_TEMPLATE:
     template_page.render()
 
