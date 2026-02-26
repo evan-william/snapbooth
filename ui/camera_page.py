@@ -84,6 +84,17 @@ def render():
             unsafe_allow_html=True,
         )
 
+        # Un-flip camera preview — browsers mirror webcam, this reverses it
+        st.markdown(
+            """<style>
+            video[data-testid="stCameraInputCamera"],
+            [data-testid="stCameraInput"] video {
+                transform: scaleX(-1) !important;
+            }
+            </style>""",
+            unsafe_allow_html=True,
+        )
+
         col_cam, col_refresh = st.columns([5, 1])
         with col_refresh:
             if st.button("↺ Refresh", key=f"cam_refresh_{count}", type="secondary",
