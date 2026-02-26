@@ -1,76 +1,34 @@
 """
 Stage 2 — Camera capture with freeze-frame confirmation.
 
-Root-cause fixes:
-  FLASH BUG:
-    Also apply scaleX(-1) to [data-testid="stCameraInput"] img so the
-    captured still matches the mirrored video — no jarring flip visible.
-
-  GLITCH ON LAST PHOTO + MediaFileHandler errors:
-    Previously stored PIL Image objects in session state. PIL objects expire
-    from Streamlit's in-memory media cache between reruns → MediaFileHandler
-    "Missing file" errors + flickering as preview_page tries to re-render stale refs.
-    Fix: serialize processed photos to JPEG bytes immediately. Bytes are plain
-    Python data that survive session state perfectly across all reruns.
+Flow per shot:
+  1. Camera widget shown → user clicks shutter
+  2. Frame is IMMEDIATELY frozen and stored as pending_photo
+  3. Camera hides, frozen preview shown
+  4. User clicks "Use this photo" → saved, move to next shot
+     OR "Retake" → discard, camera shown again
 """
 
-import io
 import streamlit as st
-from PIL import Image
 
-from config.settings import STAGE_PREVIEW, STAGE_TEMPLATE, STICKER_MAP
+from config.settings import STAGE_PREVIEW, STAGE_TEMPLATE
 from core.session import (
     add_photo, photos_count,
     set_stage, clear_photos,
     get_pending_photo, set_pending_photo,
-    get_max_photos, get_layout,
-    get_photos, get_filter, get_sticker,
-    set_processed,
+    get_max_photos, get_min_photos, get_layout,
 )
-from core.validation import validate_image_bytes, safe_open_image
-from core.filters import apply_filter
-from core.stickers import apply_sticker
+from core.validation import validate_image_bytes
 
-def _mirror_image(data: bytes) -> bytes:
-    """Membalik gambar secara horizontal agar sesuai dengan preview selfie."""
-    try:
-        img = Image.open(io.BytesIO(data))
-        flipped = img.transpose(Image.FLIP_LEFT_RIGHT)
-        buf = io.BytesIO()
-        flipped.save(buf, format="JPEG", quality=97, optimize=True)
-        return buf.getvalue()
-    except Exception:
-        return data
-
-def _build_processed_now() -> list:
-    """Proses semua foto dengan filter/stiker sebelum pindah stage."""
-    filter_key = get_filter()
-    sticker_cfg = STICKER_MAP.get(get_sticker())
-    result = []
-    for raw in get_photos():
-        img = safe_open_image(raw)
-        if img is None: continue
-        img = apply_filter(img, filter_key)
-        if sticker_cfg and sticker_cfg.key != "none":
-            img = apply_sticker(img, sticker_cfg)
-        result.append(img)
-    return result
-
-_CAMERA_CSS = """<style>
-[data-testid="stCameraInput"] video { transform: scaleX(-1) !important; }
-[data-testid="stCameraInput"] img { transform: scaleX(-1) !important; }
-</style>"""
 
 def render():
-    st.markdown(_CAMERA_CSS, unsafe_allow_html=True)
-
     max_photos = get_max_photos()
-    layout = get_layout()
-    count = photos_count()
-    pending = get_pending_photo()
+    layout     = get_layout()
+    count      = photos_count()
 
-    # 1. Navigasi Otomatis (Hanya jika benar-benar sudah selesai)
-    if count >= max_photos and pending is None:
+    # Auto-advance when quota full
+    if count >= max_photos:
+        set_pending_photo(None)
         set_stage(STAGE_PREVIEW)
         st.rerun()
         return
@@ -81,10 +39,13 @@ def render():
         unsafe_allow_html=True,
     )
 
-    # 2. Logika Konfirmasi Foto
+    pending = get_pending_photo()
+
     if pending is not None:
+        # ── Freeze-frame confirmation ─────────────────────────────────────
         st.markdown('<p class="snap-section">Use this photo?</p>', unsafe_allow_html=True)
-        col_m = st.columns([1, 3, 1])[1]
+
+        col_l, col_m, col_r = st.columns([1, 3, 1])
         with col_m:
             st.image(pending, use_container_width=True)
 
@@ -92,7 +53,7 @@ def render():
         col_ret, col_use = st.columns(2, gap="small")
 
         with col_ret:
-            if st.button("↩ Retake", use_container_width=True):
+            if st.button("↩ Retake", type="secondary", use_container_width=True):
                 set_pending_photo(None)
                 st.rerun()
 
@@ -100,53 +61,100 @@ def render():
             if st.button("✓ Use this photo", type="primary", use_container_width=True):
                 add_photo(pending)
                 set_pending_photo(None)
-                
-                # Cek jika ini foto terakhir
-                if photos_count() >= max_photos:
-                    with st.spinner("✨ Finishing your strip..."):
-                        processed = _build_processed_now()
-                        set_processed(processed)
+                new_count = photos_count()
+                if new_count >= max_photos:
                     set_stage(STAGE_PREVIEW)
                 st.rerun()
-        return
 
-    # 3. Logika Live Camera
-    st.markdown(f'<p class="snap-section">Take Photo {count + 1}</p>', unsafe_allow_html=True)
-    
-    # Tooltip helper agar user tidak bingung jika kamera mati
-    st.info("📷 Klik icon kamera di address bar jika layar hitam, lalu Refresh.")
+    else:
+        # ── Live camera ───────────────────────────────────────────────────
+        st.markdown(
+            f'<p class="snap-section">Take Photo {count + 1}</p>',
+            unsafe_allow_html=True,
+        )
 
-    # FIX: Jangan render camera_input jika sedang memproses pending (sudah dihandle return di atas)
-    camera_img = st.camera_input(
-        label="Point your camera and click Take Photo",
-        key=f"cam_widget_{count}", # Key unik per shot
-    )
+        # Camera permission helper — shown above the widget
+        st.markdown(
+            '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;'
+            'padding:10px 14px;margin-bottom:10px;font-size:0.78rem;color:#888;">'
+            '📷 &nbsp;If you see a black screen or permission prompt: '
+            '<strong style="color:#ccc;">click the camera icon in your browser\'s address bar</strong> '
+            'and allow camera access, then press the <strong style="color:#e0ff60;">↺ Refresh</strong> button below.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
-    if camera_img is not None:
-        raw = camera_img.getvalue()
-        if not validate_image_bytes(raw):
-            mirrored = _mirror_image(raw)
-            set_pending_photo(mirrored)
-            # PENTING: Segera hapus value widget agar tidak loop saat rerun
+        col_cam, col_refresh = st.columns([5, 1])
+        with col_refresh:
+            if st.button("↺ Refresh", key=f"cam_refresh_{count}", type="secondary",
+                         use_container_width=True):
+                st.rerun()
+
+        camera_img = st.camera_input(
+            label="Point your camera and click Take Photo",
+            key=f"cam_{count}",
+        )
+
+        if camera_img is not None:
+            raw = camera_img.getvalue()
+            err = validate_image_bytes(raw)
+            if err:
+                st.error(f"Could not use that image: {err}")
+            else:
+                set_pending_photo(raw)
+                st.rerun()
+
+        _render_progress_dots(count, max_photos)
+
+    # ── Navigation ───────────────────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_back, col_mid, col_next = st.columns([1, 2, 1])
+
+    with col_back:
+        if st.button("← Back", type="secondary"):
+            clear_photos()
+            set_pending_photo(None)
+            set_stage(STAGE_TEMPLATE)
             st.rerun()
 
-    _render_progress_dots(count, max_photos)
+    with col_next:
+        can_proceed = count >= max_photos and pending is None
+        if st.button(
+            "Preview →",
+            type="primary",
+            disabled=not can_proceed,
+            use_container_width=True,
+        ):
+            set_stage(STAGE_PREVIEW)
+            st.rerun()
 
-    # Navigasi Back
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("← Back to Frames", type="secondary"):
-        clear_photos()
-        set_pending_photo(None)
-        set_stage(STAGE_TEMPLATE)
-        st.rerun()
+    if 0 < count < max_photos and pending is None:
+        remaining = max_photos - count
+        st.caption(f"{remaining} more photo{'s' if remaining > 1 else ''} to go.")
+
 
 def _render_progress_dots(done: int, total: int):
+    # Cap displayed dots at 12 for very large layouts, show number instead
     if total > 12:
+        pct = int(done / total * 100)
+        st.markdown(
+            f'<div style="text-align:center;margin-top:1rem;color:#888;font-size:0.8rem;">'
+            f'{done} / {total} photos taken</div>',
+            unsafe_allow_html=True,
+        )
         st.progress(done / total)
         return
+
     dots_html = '<div style="display:flex;gap:6px;justify-content:center;margin-top:1rem;">'
     for i in range(total):
-        color = "#e0ff60" if i < done else ("#555" if i == done else "#333")
-        dots_html += f'<div style="width:10px;height:10px;border-radius:50%;background:{color};"></div>'
+        if i < done:
+            dots_html += '<div style="width:10px;height:10px;border-radius:50%;background:#e0ff60;"></div>'
+        elif i == done:
+            dots_html += (
+                '<div style="width:10px;height:10px;border-radius:50%;'
+                'background:#555;animation:pulse 1s infinite;"></div>'
+            )
+        else:
+            dots_html += '<div style="width:10px;height:10px;border-radius:50%;background:#333;"></div>'
     dots_html += "</div>"
     st.markdown(dots_html, unsafe_allow_html=True)
