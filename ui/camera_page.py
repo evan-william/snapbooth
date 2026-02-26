@@ -14,7 +14,14 @@ from core.validation import validate_image_bytes
 
 
 def render():
-    count     = photos_count()
+    count = photos_count()
+
+    # Auto-advance the moment the quota is reached — don't wait for a button click.
+    if count >= MAX_PHOTOS:
+        set_stage(STAGE_PREVIEW)
+        st.rerun()
+        return
+
     remaining = photos_remaining()
 
     st.markdown(
@@ -22,35 +29,35 @@ def render():
         unsafe_allow_html=True,
     )
 
-    if remaining > 0:
-        st.markdown(
-            f'<p class="snap-section">Take Photo {count + 1}</p>',
-            unsafe_allow_html=True,
-        )
+    st.markdown(
+        f'<p class="snap-section">Take Photo {count + 1}</p>',
+        unsafe_allow_html=True,
+    )
 
-        # --- Camera widget --------------------------------------------------
-        camera_img = st.camera_input(
-            label="Look at the camera and click the capture button",
-            key=f"cam_{count}",       # unique key forces a fresh widget each shot
-        )
+    # --- Camera widget ------------------------------------------------------
+    # Key includes count so Streamlit creates a fresh widget after each capture.
+    camera_img = st.camera_input(
+        label="Look at the camera and click the capture button",
+        key=f"cam_{count}",
+    )
 
-        if camera_img is not None:
-            raw = camera_img.getvalue()
-            err = validate_image_bytes(raw)
+    if camera_img is not None:
+        raw = camera_img.getvalue()
+        err = validate_image_bytes(raw)
 
-            if err:
-                st.error(f"Could not use that image: {err}")
+        if err:
+            st.error(f"Could not use that image: {err}")
+        else:
+            add_photo(raw)
+            new_count = photos_count()
+            if new_count >= MAX_PHOTOS:
+                st.success("All shots taken! Moving to preview…")
             else:
-                add_photo(raw)
-                # Show a quick success flash
-                if photos_remaining() > 0:
-                    st.success(f"Got it! {photos_remaining()} more to go.")
-                else:
-                    st.success("All shots taken! Moving to preview…")
-                st.rerun()
+                st.success(f"Got it! {photos_remaining()} more to go.")
+            st.rerun()
 
-        # Progress dots
-        _render_progress_dots(count, MAX_PHOTOS)
+    # Progress dots
+    _render_progress_dots(count, MAX_PHOTOS)
 
     # --- Navigation ---------------------------------------------------------
     st.markdown("<br>", unsafe_allow_html=True)
@@ -63,7 +70,7 @@ def render():
             st.rerun()
 
     with col_next:
-        can_proceed = photos_count() >= MIN_PHOTOS
+        can_proceed = count >= MIN_PHOTOS
         if st.button(
             "Preview →",
             type="primary",
@@ -73,7 +80,7 @@ def render():
             set_stage(STAGE_PREVIEW)
             st.rerun()
 
-    if not can_proceed and photos_count() > 0:
+    if not can_proceed and count > 0:
         st.caption(f"Take at least {MIN_PHOTOS} photos to continue.")
 
 
@@ -83,11 +90,10 @@ def _render_progress_dots(done: int, total: int):
         if i < done:
             color = "#e0ff60"
         elif i == done:
-            color = "#555"
-            # Pulsing dot for "current"
+            # Current slot — pulsing
             dots_html += (
-                f'<div style="width:10px;height:10px;border-radius:50%;'
-                f'background:{color};animation:pulse 1s infinite;"></div>'
+                '<div style="width:10px;height:10px;border-radius:50%;'
+                'background:#555;animation:pulse 1s infinite;"></div>'
             )
             continue
         else:

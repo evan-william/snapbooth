@@ -3,18 +3,21 @@ Stage 3 — Preview & customise.
 User applies filters and stickers, then generates the strip.
 """
 
-import io
 import streamlit as st
-from PIL import Image
 
 from config.settings import (
     FILTERS, STICKERS, FRAME_MAP,
     STAGE_CAPTURE, STAGE_DOWNLOAD,
 )
+
+# All session helpers imported at module level — never inside the function.
+# Importing inside a function body causes Python to treat the name as a local
+# variable throughout the entire function, leading to UnboundLocalError when
+# the name is referenced before the inner import runs.
 from core.session import (
-    get_photos, get_frame, get_filter, set_filter,
+    get_photos, get_frame, set_frame, get_filter, set_filter,
     get_sticker, set_sticker, get_processed, set_processed,
-    set_strip_bytes, set_strip_pdf, set_stage,
+    set_strip_bytes, set_strip_pdf, set_stage, clear_photos,
 )
 from core.validation import safe_open_image
 from core.filters import apply_filter, generate_thumbnail
@@ -26,14 +29,13 @@ from core.exporter import export_jpg, export_pdf
 def _build_processed_photos() -> list:
     """
     (Re)build the list of processed PIL Images from raw session bytes.
-    Expensive — only called when filter/sticker choice changes.
+    Only called when the filter or sticker selection changes.
     """
     filter_key  = get_filter()
     sticker_key = get_sticker()
-    photos      = get_photos()
     result      = []
 
-    for raw in photos:
+    for raw in get_photos():
         img = safe_open_image(raw)
         if img is None:
             continue
@@ -45,12 +47,13 @@ def _build_processed_photos() -> list:
 
 
 def render():
-    # --- Ensure processed images are ready --------------------------------
+    # --- Build processed images if not cached -----------------------------
     processed = get_processed()
     if not processed:
         with st.spinner("Applying effects…"):
-            processed = _build_processed_photos()
-            set_processed(processed)
+            built = _build_processed_photos()
+            set_processed(built)
+            processed = built
 
     if not processed:
         st.error("No valid photos found. Please retake your shots.")
@@ -63,28 +66,23 @@ def render():
     st.markdown('<p class="snap-section">Your Photos</p>', unsafe_allow_html=True)
     thumb_cols = st.columns(len(processed))
     for col, img in zip(thumb_cols, processed):
-        thumb = generate_thumbnail(img, width=160)
-        col.image(thumb, use_container_width=True)
+        col.image(generate_thumbnail(img, width=160), use_container_width=True)
 
     st.markdown("---")
 
     # --- Filter picker ----------------------------------------------------
     st.markdown("**Filter**")
-    filter_cols = st.columns(len(FILTERS))
     current_filter = get_filter()
+    filter_cols = st.columns(len(FILTERS))
 
     for col, f in zip(filter_cols, FILTERS):
-        active_style = (
-            "background:#e0ff60;color:#111;border-color:#e0ff60;font-weight:600;"
-            if f.key == current_filter
-            else ""
-        )
-        col.markdown(
-            f'<div class="filter-pill{"  active" if f.key == current_filter else ""}" '
-            f'style="{active_style}">{f.label}</div>',
-            unsafe_allow_html=True,
-        )
-        if col.button(f.label, key=f"filter_{f.key}", help=f.label):
+        is_active = f.key == current_filter
+        if col.button(
+            f.label,
+            key=f"filter_{f.key}",
+            type="primary" if is_active else "secondary",
+            use_container_width=True,
+        ):
             set_filter(f.key)
             st.rerun()
 
@@ -92,8 +90,8 @@ def render():
 
     # --- Sticker picker ---------------------------------------------------
     st.markdown("**Sticker**")
-    sticker_cols = st.columns(len(STICKERS))
     current_sticker = get_sticker()
+    sticker_cols = st.columns(len(STICKERS))
 
     for col, s in zip(sticker_cols, STICKERS):
         label = s.emoji if s.emoji else "None"
@@ -111,9 +109,8 @@ def render():
     # --- Frame picker (quick switch) --------------------------------------
     st.markdown("**Frame**")
     current_frame = get_frame()
-    frame_keys = list(FRAME_MAP.keys())
-    frame_labels = [FRAME_MAP[k].label for k in frame_keys]
-    selected_idx = frame_keys.index(current_frame) if current_frame in frame_keys else 0
+    frame_keys    = list(FRAME_MAP.keys())
+    selected_idx  = frame_keys.index(current_frame) if current_frame in frame_keys else 0
 
     choice = st.radio(
         "frame_radio",
@@ -124,7 +121,6 @@ def render():
         label_visibility="collapsed",
     )
     if choice != current_frame:
-        from core.session import set_frame
         set_frame(choice)
         st.rerun()
 
@@ -135,7 +131,6 @@ def render():
 
     with col_back:
         if st.button("← Retake", type="secondary"):
-            from core.session import clear_photos, set_processed
             clear_photos()
             set_processed([])
             set_stage(STAGE_CAPTURE)
@@ -146,15 +141,13 @@ def render():
             _generate_strip(processed)
 
 
-def _generate_strip(processed: list):
+def _generate_strip(photos: list):
     frame_cfg = FRAME_MAP[get_frame()]
     with st.spinner("Composing your strip…"):
         try:
-            strip = compose_strip(processed, frame_cfg)
-            jpg   = export_jpg(strip)
-            pdf   = export_pdf(strip)
-            set_strip_bytes(jpg)
-            set_strip_pdf(pdf)
+            strip = compose_strip(photos, frame_cfg)
+            set_strip_bytes(export_jpg(strip))
+            set_strip_pdf(export_pdf(strip))
             set_stage(STAGE_DOWNLOAD)
             st.rerun()
         except Exception as exc:
