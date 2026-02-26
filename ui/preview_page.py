@@ -1,15 +1,13 @@
 """
 Stage 3 — Preview & customise.
 
-Photos may already be pre-processed as JPEG bytes (stored by camera_page
-to avoid the flicker/MediaFileHandler glitch). If not (e.g. user came back
-to change filter/sticker), rebuild them.
+Photos arrive as JPEG bytes (pre-processed by camera_page to avoid glitch).
+If not present (user changed filter/sticker), rebuild from raw photos.
 
-Key change: processed photos are now stored as JPEG bytes in session state,
-NOT as PIL Image objects. PIL Images are not reliably serializable across
-Streamlit reruns and cause MediaFileHandler missing-file errors.
-
-We convert bytes → PIL only when we actually need to compose the strip.
+MediaFileHandler fix:
+  Never store PIL Image objects in session state — they expire from Streamlit's
+  in-memory media cache between reruns. Store bytes instead. Convert to PIL
+  only when needed for compositing, and don't store the PIL objects back.
 """
 
 import io
@@ -34,7 +32,11 @@ from core.exporter import export_jpg, export_pdf
 
 
 def _build_processed_bytes() -> list:
-    """Build processed photos and return as list of JPEG bytes."""
+    """
+    Build processed photos as JPEG bytes.
+    Returns list[bytes], NOT list[PIL Image].
+    Bytes survive session_state; PIL objects do not (MediaFileHandler errors).
+    """
     filter_key  = get_filter()
     sticker_cfg = STICKER_MAP.get(get_sticker())
     result = []
@@ -52,7 +54,7 @@ def _build_processed_bytes() -> list:
 
 
 def _bytes_to_pil(processed_bytes: list) -> list:
-    """Convert list of JPEG bytes back to PIL Images for compositing."""
+    """Convert list[bytes] → list[PIL Image] for compositing. Never stored back."""
     result = []
     for b in processed_bytes:
         try:
@@ -65,32 +67,31 @@ def _bytes_to_pil(processed_bytes: list) -> list:
 
 
 def _strip_preview_bytes(processed_bytes: list) -> bytes:
-    pil_images = _bytes_to_pil(processed_bytes)
     frame_cfg  = FRAME_MAP[get_frame()]
     layout_cfg = get_layout()
-    strip      = compose_strip(pil_images, frame_cfg, layout=layout_cfg)
+    pil_imgs   = _bytes_to_pil(processed_bytes)
+    strip      = compose_strip(pil_imgs, frame_cfg, layout=layout_cfg)
     buf        = io.BytesIO()
     strip.save(buf, format="JPEG", quality=92, subsampling=0)
     return buf.getvalue()
 
 
 def render():
-    # Processed photos are stored as JPEG bytes (not PIL Images).
-    # If missing or empty, rebuild from raw photos.
-    processed_bytes = get_processed()
+    # Get processed photos — must be bytes, not PIL objects
+    processed = get_processed()
 
-    # Validate that stored data is actually bytes (not stale PIL objects)
-    if processed_bytes and not isinstance(processed_bytes[0], (bytes, bytearray)):
-        processed_bytes = []
+    # Safety check: if somehow PIL objects snuck in (old session), rebuild as bytes
+    if processed and not isinstance(processed[0], (bytes, bytearray)):
+        processed = []
         set_processed([])
 
-    if not processed_bytes:
+    if not processed:
         with st.spinner("Applying effects…"):
             built = _build_processed_bytes()
             set_processed(built)
-            processed_bytes = built
+            processed = built
 
-    if not processed_bytes:
+    if not processed:
         st.error("No valid photos found. Please retake your shots.")
         if st.button("← Retake", type="secondary"):
             clear_photos()
@@ -103,22 +104,21 @@ def render():
     col_ctrl, col_preview = st.columns([3, 2], gap="large")
 
     with col_ctrl:
-        # --- Photo thumbnails ---
+        # --- Photo thumbnails (render from bytes, fresh each time) ---
         st.markdown('<p class="snap-section">Your Photos</p>', unsafe_allow_html=True)
-        n_cols  = min(4, len(processed_bytes))
+        n_cols  = min(4, len(processed))
         th_cols = st.columns(n_cols)
-        for i, img_bytes in enumerate(processed_bytes):
-            # Open from bytes for thumbnail — this is fine, it's immediate
+        for i, img_bytes in enumerate(processed):
             try:
-                img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-                thumb = generate_thumbnail(img, width=120)
+                pil_img = Image.open(io.BytesIO(img_bytes))
+                thumb   = generate_thumbnail(pil_img, width=120)
                 th_cols[i % n_cols].image(thumb, width='stretch')
             except Exception:
                 pass
 
         st.markdown("---")
 
-        # --- Filter (split into Classic + Aesthetic groups) ---
+        # --- Filter ---
         st.markdown("**Filter**")
         current_filter = get_filter()
 
@@ -146,7 +146,6 @@ def render():
             label_visibility="collapsed",
         )
 
-        # Detect which group the user just changed
         new_filter = current_filter
         if classic_choice != current_filter and classic_choice in CLASSIC_KEYS:
             new_filter = classic_choice
@@ -204,14 +203,14 @@ def render():
                 st.rerun()
         with col_gen:
             if st.button("Generate Strip →", type="primary", use_container_width=True):
-                _generate_strip(processed_bytes)
+                _generate_strip(processed)
 
-    # ── Live strip preview ──────────────────────────────────────────────────
+    # Live strip preview
     with col_preview:
         st.markdown('<p class="snap-section">Preview</p>', unsafe_allow_html=True)
         try:
             st.image(
-                _strip_preview_bytes(processed_bytes),
+                _strip_preview_bytes(processed),
                 width='stretch',
                 caption=f"{FRAME_MAP[get_frame()].label} · {layout_cfg.cols}×{layout_cfg.rows}",
             )
@@ -220,12 +219,12 @@ def render():
 
 
 def _generate_strip(processed_bytes: list):
-    pil_images = _bytes_to_pil(processed_bytes)
     frame_cfg  = FRAME_MAP[get_frame()]
     layout_cfg = get_layout()
     with st.spinner("Composing your HD strip…"):
         try:
-            strip = compose_strip(pil_images, frame_cfg, layout=layout_cfg)
+            pil_imgs = _bytes_to_pil(processed_bytes)
+            strip    = compose_strip(pil_imgs, frame_cfg, layout=layout_cfg)
             set_strip_bytes(export_jpg(strip))
             set_strip_pdf(export_pdf(strip))
             set_stage(STAGE_DOWNLOAD)

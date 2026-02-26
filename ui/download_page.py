@@ -25,7 +25,6 @@ def render():
 
     st.markdown('<p class="snap-section">Your Photobooth Strip</p>', unsafe_allow_html=True)
 
-    # Display the strip centred
     col_l, col_m, col_r = st.columns([1, 2, 1])
     with col_m:
         st.image(jpg, width='stretch', caption="Your strip is ready!")
@@ -33,7 +32,6 @@ def render():
     st.markdown("---")
     st.markdown("**Download**")
 
-    # Force black text on the primary (yellow) download button
     st.markdown(
         """<style>
         [data-testid="stDownloadButton"] > button {
@@ -44,10 +42,6 @@ def render():
             background: #e0ff60 !important;
             color: #111111 !important;
             border: none !important;
-        }
-        [data-testid="stDownloadButton"] > button[kind="secondary"] {
-            color: #111111 !important;
-            border: 1px solid #555 !important;
         }
         </style>""",
         unsafe_allow_html=True,
