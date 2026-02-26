@@ -1,5 +1,17 @@
 """
-Stage 2 — Camera capture with freeze-frame confirmation + auto-timer.
+Stage 2 — Camera capture with freeze-frame confirmation.
+
+Root-cause fixes:
+  FLASH BUG:
+    Also apply scaleX(-1) to [data-testid="stCameraInput"] img so the
+    captured still matches the mirrored video — no jarring flip visible.
+
+  GLITCH ON LAST PHOTO + MediaFileHandler errors:
+    Previously stored PIL Image objects in session state. PIL objects expire
+    from Streamlit's in-memory media cache between reruns → MediaFileHandler
+    "Missing file" errors + flickering as preview_page tries to re-render stale refs.
+    Fix: serialize processed photos to JPEG bytes immediately. Bytes are plain
+    Python data that survive session state perfectly across all reruns.
 """
 
 import io
@@ -21,6 +33,7 @@ from core.stickers import apply_sticker
 
 
 def _mirror_image(data: bytes) -> bytes:
+    """Horizontally flip the captured JPEG to match the mirrored live preview."""
     try:
         img = Image.open(io.BytesIO(data))
         flipped = img.transpose(Image.FLIP_LEFT_RIGHT)
@@ -32,6 +45,15 @@ def _mirror_image(data: bytes) -> bytes:
 
 
 def _build_processed_as_bytes() -> list:
+    """
+    Process all stored photos with current filter/sticker.
+    Returns list[bytes] — JPEG bytes, NOT PIL Image objects.
+
+    Storing bytes (not PIL objects) is critical: PIL Images are Python objects
+    that Streamlit serializes via its media cache. That cache expires between
+    reruns, causing MediaFileHandler "Missing file" errors and UI flickering.
+    Plain bytes survive session_state perfectly.
+    """
     filter_key  = get_filter()
     sticker_cfg = STICKER_MAP.get(get_sticker())
     result = []
@@ -42,166 +64,39 @@ def _build_processed_as_bytes() -> list:
         img = apply_filter(img, filter_key)
         if sticker_cfg and sticker_cfg.key != "none":
             img = apply_sticker(img, sticker_cfg)
+        # Serialize to bytes immediately — never store PIL objects in session state
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=95, subsampling=0)
         result.append(buf.getvalue())
     return result
 
 
-def _get_timer_js(seconds: int) -> str:
-    """
-    Full self-contained timer JS:
-    - Counts down from N to 0, updating the big number each second
-    - Disables all timer pill buttons and the take-photo button while running
-    - Auto-clicks the shutter when it hits 0
-    - Re-enables everything after shutter click (Streamlit will rerun anyway)
-    """
-    return f"""
-<script>
-(function() {{
-  // Kill any existing timer
-  if (window._snapTimer) {{ clearInterval(window._snapTimer); window._snapTimer = null; }}
-
-  var total   = {seconds};
-  var remaining = total;
-
-  // --- Find / create the countdown display ---
-  var display = document.getElementById('snap-countdown-num');
-  if (!display) return;
-
-  // --- Disable timer pill buttons ---
-  var timerBtns = document.querySelectorAll('[data-snap-timer-btn]');
-  timerBtns.forEach(function(b) {{ b.disabled = true; b.style.opacity = '0.35'; }});
-
-  // --- Disable the camera shutter button ---
-  function getShutter() {{
-    return document.querySelector('[data-testid="stCameraInputButton"]');
-  }}
-  var shutter = getShutter();
-  if (shutter) {{ shutter.disabled = true; shutter.style.opacity = '0.3'; }}
-
-  // --- Show the countdown overlay ---
-  var overlay = document.getElementById('snap-timer-overlay');
-  if (overlay) overlay.style.display = 'flex';
-
-  // --- Tick ---
-  window._snapTimer = setInterval(function() {{
-    remaining--;
-    var d = document.getElementById('snap-countdown-num');
-    if (d) d.textContent = remaining;
-
-    if (remaining <= 0) {{
-      clearInterval(window._snapTimer);
-      window._snapTimer = null;
-
-      // Re-enable shutter briefly, click it, then it's Streamlit's turn
-      var s = getShutter();
-      if (s) {{
-        s.disabled = false;
-        s.style.opacity = '1';
-        s.click();
-      }}
-
-      // Re-enable timer pills too
-      var btns = document.querySelectorAll('[data-snap-timer-btn]');
-      btns.forEach(function(b) {{ b.disabled = false; b.style.opacity = '1'; }});
-
-      // Hide overlay
-      var ov = document.getElementById('snap-timer-overlay');
-      if (ov) ov.style.display = 'none';
-    }}
-  }}, 1000);
-}})();
-</script>
-"""
-
-
-_BASE_CSS = """<style>
-[data-testid="stCameraInput"] video { transform: scaleX(-1) !important; }
-[data-testid="stCameraInput"] img   { transform: scaleX(-1) !important; }
-
-/* Timer overlay — sits on top of camera widget */
-#snap-timer-overlay {{
-    display: none;
-    position: fixed;
-    inset: 0;
-    z-index: 99999;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0,0,0,0.55);
-    backdrop-filter: blur(2px);
-    flex-direction: column;
-    gap: 0.5rem;
-    pointer-events: none;
-}}
-.snap-timer-label-big {{
-    color: #aaa;
-    font-size: 1rem;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    font-family: 'DM Sans', sans-serif;
-}}
-#snap-countdown-num {{
-    font-size: 9rem;
-    font-weight: 900;
-    color: #e0ff60;
-    text-shadow: 0 0 60px #e0ff6099, 0 0 20px #e0ff6066;
-    line-height: 1;
-    font-family: 'DM Serif Display', serif;
-    animation: snapPulse 1s ease-in-out infinite;
-}}
-@keyframes snapPulse {{
-    0%   {{ transform: scale(1);    opacity: 1; }}
-    50%  {{ transform: scale(1.12); opacity: 0.8; }}
-    100% {{ transform: scale(1);    opacity: 1; }}
-}}
-.snap-timer-sublabel {{
-    color: #666;
-    font-size: 0.75rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-}}
-
-/* Footer */
-.snap-footer {{
-    margin-top: 3rem;
-    padding-top: 1.2rem;
-    border-top: 1px solid #1e1e1e;
-    text-align: center;
-}}
-.snap-footer-name {{
-    font-size: 0.78rem;
-    font-weight: 600;
-    color: #555;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-}}
-.snap-footer-copy {{
-    font-size: 0.68rem;
-    color: #333;
-    margin-top: 0.2rem;
-    letter-spacing: 0.06em;
-}}
+_CAMERA_CSS = """<style>
+/* Mirror live video feed → selfie feel */
+[data-testid="stCameraInput"] video {
+    transform: scaleX(-1) !important;
+}
+/*
+ * KEY FIX: After capture, Streamlit shows the raw captured frame as an <img>
+ * inside the widget BEFORE Python reacts. That img is unflipped → user sees
+ * the jarring flip for a split second.
+ * By also flipping the img, the transition is invisible.
+ */
+[data-testid="stCameraInput"] img {
+    transform: scaleX(-1) !important;
+}
 </style>"""
 
 
 def render():
-    st.markdown(_BASE_CSS, unsafe_allow_html=True)
-
-    # Global timer overlay — always present in DOM, shown/hidden by JS
-    st.markdown("""
-        <div id="snap-timer-overlay">
-            <div class="snap-timer-label-big">📷 &nbsp; Get ready…</div>
-            <div id="snap-countdown-num">3</div>
-            <div class="snap-timer-sublabel">seconds</div>
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown(_CAMERA_CSS, unsafe_allow_html=True)
 
     max_photos = get_max_photos()
     layout     = get_layout()
     count      = photos_count()
     pending    = get_pending_photo()
 
+    # Hard guard: already full and not confirming → go to preview
     if count >= max_photos and pending is None:
         set_stage(STAGE_PREVIEW)
         st.rerun()
@@ -217,10 +112,6 @@ def render():
     # BRANCH A — Freeze-frame confirmation
     # ══════════════════════════════════════════════════════════════════════
     if pending is not None:
-        # Reset timer selection for next shot
-        timer_key = f"timer_choice_{count}"
-        st.session_state[timer_key] = 0
-
         st.markdown('<p class="snap-section">Use this photo?</p>', unsafe_allow_html=True)
 
         col_l, col_m, col_r = st.columns([1, 3, 1])
@@ -240,7 +131,11 @@ def render():
                 add_photo(pending)
                 set_pending_photo(None)
                 new_count = photos_count()
+
                 if new_count >= max_photos:
+                    # GLITCH FIX: pre-process to bytes HERE before switching stage.
+                    # This prevents cold-start processing in preview_page which
+                    # caused multiple reruns → visible flickering.
                     with st.spinner("✨ Preparing your strip…"):
                         processed_bytes = _build_processed_as_bytes()
                         if processed_bytes:
@@ -257,56 +152,22 @@ def render():
             set_stage(STAGE_TEMPLATE)
             st.rerun()
 
-        _render_footer()
-        return
+        return  # don't render camera widget while confirming
 
     # ══════════════════════════════════════════════════════════════════════
-    # BRANCH B — Live camera + Timer selector
+    # BRANCH B — Live camera
     # ══════════════════════════════════════════════════════════════════════
     st.markdown(
         f'<p class="snap-section">Take Photo {count + 1}</p>',
         unsafe_allow_html=True,
     )
 
-    # Timer state — per shot, reset after photo taken
-    timer_key     = f"timer_choice_{count}"
-    timer_active  = f"timer_active_{count}"
-    if timer_key not in st.session_state:
-        st.session_state[timer_key]    = 0
-        st.session_state[timer_active] = False
-
-    chosen_timer = st.session_state[timer_key]
-    is_active    = st.session_state.get(timer_active, False)
-
-    # ── Timer pill selector (disabled while timer is running) ─────────────
-    st.markdown("**⏱ Timer**")
-    timer_options = [(0, "Off"), (3, "3s"), (6, "6s"), (10, "10s"), (15, "15s")]
-    pill_cols = st.columns(5, gap="small")
-
-    for col, (secs, label) in zip(pill_cols, timer_options):
-        selected = chosen_timer == secs
-        with col:
-            btn_label = f"✓ {label}" if selected else label
-            if st.button(
-                btn_label,
-                key=f"timer_pill_{count}_{secs}",
-                type="primary" if selected else "secondary",
-                disabled=is_active,          # locked while countdown running
-                use_container_width=True,
-            ):
-                st.session_state[timer_key]    = secs
-                st.session_state[timer_active] = False
-                st.rerun()
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # Camera hint
     st.markdown(
         '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;'
         'padding:10px 14px;margin-bottom:10px;font-size:0.78rem;color:#888;">'
-        '📷 &nbsp;If you see a black screen: '
-        '<strong style="color:#ccc;">allow camera access in your browser</strong>, '
-        'then press <strong style="color:#e0ff60;">↺ Refresh</strong>.'
+        '📷 &nbsp;If you see a black screen or permission prompt: '
+        '<strong style="color:#ccc;">click the camera icon in your browser\'s address bar</strong> '
+        'and allow camera access, then press the <strong style="color:#e0ff60;">↺ Refresh</strong> button below.'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -314,37 +175,15 @@ def render():
     col_cam, col_refresh = st.columns([5, 1])
     with col_refresh:
         if st.button("↺ Refresh", key=f"cam_refresh_{count}", type="secondary",
-                     use_container_width=True, disabled=is_active):
+                     use_container_width=True):
             st.rerun()
 
-    # ── Start Timer button (only if timer > 0 and not yet active) ─────────
-    if chosen_timer > 0 and not is_active:
-        st.markdown("<br>", unsafe_allow_html=True)
-        col_tl, col_tc, col_tr = st.columns([1, 2, 1])
-        with col_tc:
-            if st.button(
-                f"▶ Start {chosen_timer}s Timer",
-                key=f"start_timer_{count}",
-                type="primary",
-                use_container_width=True,
-            ):
-                st.session_state[timer_active] = True
-                st.rerun()
-
-    # ── Camera widget ─────────────────────────────────────────────────────
     camera_img = st.camera_input(
         label="Point your camera and click Take Photo",
         key=f"cam_{count}",
     )
 
-    # ── Inject timer JS AFTER camera widget so shutter button exists in DOM ─
-    if is_active and chosen_timer > 0:
-        st.markdown(_get_timer_js(chosen_timer), unsafe_allow_html=True)
-
     if camera_img is not None:
-        # Photo captured (either manual or by timer auto-click)
-        st.session_state[timer_active] = False
-        st.session_state[timer_key]    = 0   # reset timer choice for next shot
         raw = camera_img.getvalue()
         err = validate_image_bytes(raw)
         if err:
@@ -361,7 +200,7 @@ def render():
     col_back, col_mid, col_next = st.columns([1, 2, 1])
 
     with col_back:
-        if st.button("← Back", type="secondary", disabled=is_active):
+        if st.button("← Back", type="secondary"):
             clear_photos()
             set_pending_photo(None)
             set_stage(STAGE_TEMPLATE)
@@ -371,7 +210,7 @@ def render():
         if st.button(
             "Preview →",
             type="primary",
-            disabled=(count < max_photos) or is_active,
+            disabled=(count < max_photos),
             use_container_width=True,
         ):
             set_stage(STAGE_PREVIEW)
@@ -380,8 +219,6 @@ def render():
     if 0 < count < max_photos:
         remaining = max_photos - count
         st.caption(f"{remaining} more photo{'s' if remaining > 1 else ''} to go.")
-
-    _render_footer()
 
 
 def _render_progress_dots(done: int, total: int):
@@ -401,7 +238,7 @@ def _render_progress_dots(done: int, total: int):
         elif i == done:
             dots_html += (
                 '<div style="width:10px;height:10px;border-radius:50%;'
-                'background:#555;"></div>'
+                'background:#555;animation:pulse 1s infinite;"></div>'
             )
         else:
             dots_html += '<div style="width:10px;height:10px;border-radius:50%;background:#333;"></div>'
