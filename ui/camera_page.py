@@ -1,12 +1,5 @@
 """
 Stage 2 — Camera capture with freeze-frame confirmation + auto-timer.
-
-Fixes:
-  - Mirror CSS on both video and img (no flip flash)
-  - Store processed photos as JPEG bytes (no MediaFileHandler errors)
-  - Pre-process on last photo before stage switch (no flicker)
-  - Auto-timer: 3 / 6 / 10 / 15 seconds countdown before auto-capture
-  - Professional footer with copyright
 """
 
 import io
@@ -55,101 +48,154 @@ def _build_processed_as_bytes() -> list:
     return result
 
 
-_CAMERA_CSS = """<style>
-[data-testid="stCameraInput"] video { transform: scaleX(-1) !important; }
-[data-testid="stCameraInput"] img   { transform: scaleX(-1) !important; }
-
-/* Timer countdown display */
-.snap-timer-ring {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    margin: 0.5rem 0 1rem;
-}
-.snap-timer-number {
-    font-size: 5rem;
-    font-weight: 800;
-    color: #e0ff60;
-    text-shadow: 0 0 30px #e0ff6088;
-    line-height: 1;
-    font-family: 'DM Serif Display', serif;
-    animation: timerPulse 1s ease-in-out infinite;
-}
-@keyframes timerPulse {
-    0%   { transform: scale(1);    opacity: 1; }
-    50%  { transform: scale(1.08); opacity: 0.85; }
-    100% { transform: scale(1);    opacity: 1; }
-}
-.snap-timer-label {
-    text-align: center;
-    color: #888;
-    font-size: 0.8rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin-bottom: 0.5rem;
-}
-
-/* Timer option pills */
-.timer-pills {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    margin-bottom: 0.5rem;
-}
-
-/* Footer */
-.snap-footer {
-    margin-top: 3rem;
-    padding-top: 1.2rem;
-    border-top: 1px solid #1e1e1e;
-    text-align: center;
-}
-.snap-footer-name {
-    font-size: 0.78rem;
-    font-weight: 600;
-    color: #555;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-}
-.snap-footer-copy {
-    font-size: 0.68rem;
-    color: #333;
-    margin-top: 0.2rem;
-    letter-spacing: 0.06em;
-}
-</style>"""
-
-# Timer JS — injected once per shot, auto-submits camera after N seconds
-_TIMER_JS = """
+def _get_timer_js(seconds: int) -> str:
+    """
+    Full self-contained timer JS:
+    - Counts down from N to 0, updating the big number each second
+    - Disables all timer pill buttons and the take-photo button while running
+    - Auto-clicks the shutter when it hits 0
+    - Re-enables everything after shutter click (Streamlit will rerun anyway)
+    """
+    return f"""
 <script>
 (function() {{
-  var seconds = {seconds};
-  var displayEl = document.getElementById('snap-countdown');
-  if (!displayEl) return;
+  // Kill any existing timer
+  if (window._snapTimer) {{ clearInterval(window._snapTimer); window._snapTimer = null; }}
 
-  var interval = setInterval(function() {{
-    seconds--;
-    if (displayEl) displayEl.textContent = seconds;
-    if (seconds <= 0) {{
-      clearInterval(interval);
-      // Trigger the camera shutter button automatically
-      var shutterBtn = document.querySelector('[data-testid="stCameraInputButton"]');
-      if (shutterBtn) {{
-        shutterBtn.click();
+  var total   = {seconds};
+  var remaining = total;
+
+  // --- Find / create the countdown display ---
+  var display = document.getElementById('snap-countdown-num');
+  if (!display) return;
+
+  // --- Disable timer pill buttons ---
+  var timerBtns = document.querySelectorAll('[data-snap-timer-btn]');
+  timerBtns.forEach(function(b) {{ b.disabled = true; b.style.opacity = '0.35'; }});
+
+  // --- Disable the camera shutter button ---
+  function getShutter() {{
+    return document.querySelector('[data-testid="stCameraInputButton"]');
+  }}
+  var shutter = getShutter();
+  if (shutter) {{ shutter.disabled = true; shutter.style.opacity = '0.3'; }}
+
+  // --- Show the countdown overlay ---
+  var overlay = document.getElementById('snap-timer-overlay');
+  if (overlay) overlay.style.display = 'flex';
+
+  // --- Tick ---
+  window._snapTimer = setInterval(function() {{
+    remaining--;
+    var d = document.getElementById('snap-countdown-num');
+    if (d) d.textContent = remaining;
+
+    if (remaining <= 0) {{
+      clearInterval(window._snapTimer);
+      window._snapTimer = null;
+
+      // Re-enable shutter briefly, click it, then it's Streamlit's turn
+      var s = getShutter();
+      if (s) {{
+        s.disabled = false;
+        s.style.opacity = '1';
+        s.click();
       }}
+
+      // Re-enable timer pills too
+      var btns = document.querySelectorAll('[data-snap-timer-btn]');
+      btns.forEach(function(b) {{ b.disabled = false; b.style.opacity = '1'; }});
+
+      // Hide overlay
+      var ov = document.getElementById('snap-timer-overlay');
+      if (ov) ov.style.display = 'none';
     }}
   }}, 1000);
-
-  // Store interval ID so we can clear it if user clicks Retake
-  window._snapTimerInterval = interval;
 }})();
 </script>
 """
 
 
+_BASE_CSS = """<style>
+[data-testid="stCameraInput"] video { transform: scaleX(-1) !important; }
+[data-testid="stCameraInput"] img   { transform: scaleX(-1) !important; }
+
+/* Timer overlay — sits on top of camera widget */
+#snap-timer-overlay {{
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 99999;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(2px);
+    flex-direction: column;
+    gap: 0.5rem;
+    pointer-events: none;
+}}
+.snap-timer-label-big {{
+    color: #aaa;
+    font-size: 1rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    font-family: 'DM Sans', sans-serif;
+}}
+#snap-countdown-num {{
+    font-size: 9rem;
+    font-weight: 900;
+    color: #e0ff60;
+    text-shadow: 0 0 60px #e0ff6099, 0 0 20px #e0ff6066;
+    line-height: 1;
+    font-family: 'DM Serif Display', serif;
+    animation: snapPulse 1s ease-in-out infinite;
+}}
+@keyframes snapPulse {{
+    0%   {{ transform: scale(1);    opacity: 1; }}
+    50%  {{ transform: scale(1.12); opacity: 0.8; }}
+    100% {{ transform: scale(1);    opacity: 1; }}
+}}
+.snap-timer-sublabel {{
+    color: #666;
+    font-size: 0.75rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+}}
+
+/* Footer */
+.snap-footer {{
+    margin-top: 3rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid #1e1e1e;
+    text-align: center;
+}}
+.snap-footer-name {{
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #555;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}}
+.snap-footer-copy {{
+    font-size: 0.68rem;
+    color: #333;
+    margin-top: 0.2rem;
+    letter-spacing: 0.06em;
+}}
+</style>"""
+
+
 def render():
-    st.markdown(_CAMERA_CSS, unsafe_allow_html=True)
+    st.markdown(_BASE_CSS, unsafe_allow_html=True)
+
+    # Global timer overlay — always present in DOM, shown/hidden by JS
+    st.markdown("""
+        <div id="snap-timer-overlay">
+            <div class="snap-timer-label-big">📷 &nbsp; Get ready…</div>
+            <div id="snap-countdown-num">3</div>
+            <div class="snap-timer-sublabel">seconds</div>
+        </div>
+    """, unsafe_allow_html=True)
 
     max_photos = get_max_photos()
     layout     = get_layout()
@@ -171,6 +217,10 @@ def render():
     # BRANCH A — Freeze-frame confirmation
     # ══════════════════════════════════════════════════════════════════════
     if pending is not None:
+        # Reset timer selection for next shot
+        timer_key = f"timer_choice_{count}"
+        st.session_state[timer_key] = 0
+
         st.markdown('<p class="snap-section">Use this photo?</p>', unsafe_allow_html=True)
 
         col_l, col_m, col_r = st.columns([1, 3, 1])
@@ -218,35 +268,39 @@ def render():
         unsafe_allow_html=True,
     )
 
-    # ── Timer selector ────────────────────────────────────────────────────
-    timer_key = f"timer_choice_{count}"
+    # Timer state — per shot, reset after photo taken
+    timer_key     = f"timer_choice_{count}"
+    timer_active  = f"timer_active_{count}"
     if timer_key not in st.session_state:
-        st.session_state[timer_key] = 0   # 0 = off
+        st.session_state[timer_key]    = 0
+        st.session_state[timer_active] = False
 
+    chosen_timer = st.session_state[timer_key]
+    is_active    = st.session_state.get(timer_active, False)
+
+    # ── Timer pill selector (disabled while timer is running) ─────────────
     st.markdown("**⏱ Timer**")
-    timer_cols = st.columns(5, gap="small")
-    timer_options = [
-        (0,  "Off"),
-        (3,  "3s"),
-        (6,  "6s"),
-        (10, "10s"),
-        (15, "15s"),
-    ]
-    for col, (secs, label) in zip(timer_cols, timer_options):
-        selected = st.session_state[timer_key] == secs
+    timer_options = [(0, "Off"), (3, "3s"), (6, "6s"), (10, "10s"), (15, "15s")]
+    pill_cols = st.columns(5, gap="small")
+
+    for col, (secs, label) in zip(pill_cols, timer_options):
+        selected = chosen_timer == secs
         with col:
+            btn_label = f"✓ {label}" if selected else label
             if st.button(
-                f"{'✓ ' if selected else ''}{label}",
-                key=f"timer_btn_{count}_{secs}",
+                btn_label,
+                key=f"timer_pill_{count}_{secs}",
                 type="primary" if selected else "secondary",
+                disabled=is_active,          # locked while countdown running
                 use_container_width=True,
             ):
-                st.session_state[timer_key] = secs
+                st.session_state[timer_key]    = secs
+                st.session_state[timer_active] = False
                 st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # ── Camera permission tip ─────────────────────────────────────────────
+    # Camera hint
     st.markdown(
         '<div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;'
         'padding:10px 14px;margin-bottom:10px;font-size:0.78rem;color:#888;">'
@@ -260,41 +314,22 @@ def render():
     col_cam, col_refresh = st.columns([5, 1])
     with col_refresh:
         if st.button("↺ Refresh", key=f"cam_refresh_{count}", type="secondary",
-                     use_container_width=True):
+                     use_container_width=True, disabled=is_active):
             st.rerun()
 
-    # ── Active timer countdown display ────────────────────────────────────
-    chosen_timer = st.session_state.get(timer_key, 0)
-    active_timer_key = f"timer_started_{count}"
-
-    if chosen_timer > 0:
-        # Show START button if timer not yet running
-        if not st.session_state.get(active_timer_key, False):
-            st.markdown("<br>", unsafe_allow_html=True)
-            col_tl, col_tc, col_tr = st.columns([1, 2, 1])
-            with col_tc:
-                if st.button(
-                    f"▶ Start {chosen_timer}s Timer",
-                    key=f"start_timer_{count}",
-                    type="primary",
-                    use_container_width=True,
-                ):
-                    st.session_state[active_timer_key] = True
-                    st.rerun()
-        else:
-            # Timer is running — show big animated countdown
-            st.markdown(
-                f'<div class="snap-timer-label">Get ready…</div>'
-                f'<div class="snap-timer-ring">'
-                f'<div class="snap-timer-number" id="snap-countdown">{chosen_timer}</div>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
-            # Inject JS countdown that auto-clicks the shutter
-            st.markdown(
-                _TIMER_JS.format(seconds=chosen_timer),
-                unsafe_allow_html=True,
-            )
+    # ── Start Timer button (only if timer > 0 and not yet active) ─────────
+    if chosen_timer > 0 and not is_active:
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_tl, col_tc, col_tr = st.columns([1, 2, 1])
+        with col_tc:
+            if st.button(
+                f"▶ Start {chosen_timer}s Timer",
+                key=f"start_timer_{count}",
+                type="primary",
+                use_container_width=True,
+            ):
+                st.session_state[timer_active] = True
+                st.rerun()
 
     # ── Camera widget ─────────────────────────────────────────────────────
     camera_img = st.camera_input(
@@ -302,9 +337,14 @@ def render():
         key=f"cam_{count}",
     )
 
+    # ── Inject timer JS AFTER camera widget so shutter button exists in DOM ─
+    if is_active and chosen_timer > 0:
+        st.markdown(_get_timer_js(chosen_timer), unsafe_allow_html=True)
+
     if camera_img is not None:
-        # Reset timer state for this shot
-        st.session_state[active_timer_key] = False
+        # Photo captured (either manual or by timer auto-click)
+        st.session_state[timer_active] = False
+        st.session_state[timer_key]    = 0   # reset timer choice for next shot
         raw = camera_img.getvalue()
         err = validate_image_bytes(raw)
         if err:
@@ -316,12 +356,12 @@ def render():
 
     _render_progress_dots(count, max_photos)
 
-    # ── Navigation ────────────────────────────────────────────────────────
+    # Navigation
     st.markdown("<br>", unsafe_allow_html=True)
     col_back, col_mid, col_next = st.columns([1, 2, 1])
 
     with col_back:
-        if st.button("← Back", type="secondary"):
+        if st.button("← Back", type="secondary", disabled=is_active):
             clear_photos()
             set_pending_photo(None)
             set_stage(STAGE_TEMPLATE)
@@ -331,7 +371,7 @@ def render():
         if st.button(
             "Preview →",
             type="primary",
-            disabled=(count < max_photos),
+            disabled=(count < max_photos) or is_active,
             use_container_width=True,
         ):
             set_stage(STAGE_PREVIEW)
@@ -361,7 +401,7 @@ def _render_progress_dots(done: int, total: int):
         elif i == done:
             dots_html += (
                 '<div style="width:10px;height:10px;border-radius:50%;'
-                'background:#555;animation:pulse 1s infinite;"></div>'
+                'background:#555;"></div>'
             )
         else:
             dots_html += '<div style="width:10px;height:10px;border-radius:50%;background:#333;"></div>'
@@ -373,8 +413,8 @@ def _render_footer():
     st.markdown(
         """
         <div class="snap-footer">
-            <div class="snap-footer-name">Evan William</div>
-            <div class="snap-footer-copy">© 2026 Evan William · SnapBooth · All rights reserved</div>
+            <div class="snap-footer-name">Evan Wollian</div>
+            <div class="snap-footer-copy">© 2025 Evan Wollian · SnapBooth · All rights reserved</div>
         </div>
         """,
         unsafe_allow_html=True,
