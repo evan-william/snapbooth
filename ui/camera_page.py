@@ -13,27 +13,32 @@ import io
 import streamlit as st
 from PIL import Image
 
-from config.settings import MAX_PHOTOS, MIN_PHOTOS, STAGE_PREVIEW, STAGE_TEMPLATE
+from config.settings import STAGE_PREVIEW, STAGE_TEMPLATE
 from core.session import (
-    get_photos, add_photo, photos_count, photos_remaining,
+    get_photos, add_photo, photos_count,
     set_stage, clear_photos,
     get_pending_photo, set_pending_photo,
+    get_max_photos, get_min_photos, get_layout,
 )
 from core.validation import validate_image_bytes
 
 
 def render():
-    count = photos_count()
+    max_photos = get_max_photos()
+    min_photos = get_min_photos()
+    layout     = get_layout()
+    count      = photos_count()
 
     # Auto-advance when quota full
-    if count >= MAX_PHOTOS:
+    if count >= max_photos:
         set_pending_photo(None)
         set_stage(STAGE_PREVIEW)
         st.rerun()
         return
 
     st.markdown(
-        f'<div class="photo-counter">Shot {count + 1} of {MAX_PHOTOS}</div>',
+        f'<div class="photo-counter">Shot {count + 1} of {max_photos} '
+        f'({layout.cols}×{layout.rows} layout)</div>',
         unsafe_allow_html=True,
     )
 
@@ -46,7 +51,6 @@ def render():
             unsafe_allow_html=True,
         )
 
-        # Show the frozen frame centred
         col_l, col_m, col_r = st.columns([1, 3, 1])
         with col_m:
             st.image(pending, use_container_width=True)
@@ -64,7 +68,7 @@ def render():
                 add_photo(pending)
                 set_pending_photo(None)
                 new_count = photos_count()
-                if new_count >= MAX_PHOTOS:
+                if new_count >= max_photos:
                     set_stage(STAGE_PREVIEW)
                 st.rerun()
 
@@ -75,7 +79,6 @@ def render():
             unsafe_allow_html=True,
         )
 
-        # Key changes per shot so the widget is always fresh
         camera_img = st.camera_input(
             label="Click the camera button to capture",
             key=f"cam_{count}",
@@ -87,11 +90,10 @@ def render():
             if err:
                 st.error(f"Could not use that image: {err}")
             else:
-                # Freeze immediately — stop the live feed before user moves
                 set_pending_photo(raw)
                 st.rerun()
 
-        _render_progress_dots(count, MAX_PHOTOS)
+        _render_progress_dots(count, max_photos)
 
     # ── Navigation ───────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
@@ -105,7 +107,7 @@ def render():
             st.rerun()
 
     with col_next:
-        can_proceed = count >= MIN_PHOTOS and pending is None
+        can_proceed = count >= min_photos and pending is None
         if st.button(
             "Preview →",
             type="primary",
@@ -115,8 +117,8 @@ def render():
             set_stage(STAGE_PREVIEW)
             st.rerun()
 
-    if count > 0 and count < MIN_PHOTOS and pending is None:
-        st.caption(f"Take at least {MIN_PHOTOS} photos to continue.")
+    if count > 0 and count < min_photos and pending is None:
+        st.caption(f"Take at least {min_photos} photos to continue.")
 
 
 def _render_progress_dots(done: int, total: int):

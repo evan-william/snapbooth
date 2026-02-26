@@ -7,18 +7,19 @@ import streamlit as st
 from typing import Any, List, Optional
 
 from config.settings import (
-    KEY_STAGE, KEY_FRAME, KEY_PHOTOS, KEY_FILTER,
+    KEY_STAGE, KEY_FRAME, KEY_LAYOUT, KEY_PHOTOS, KEY_FILTER,
     KEY_STICKER, KEY_PROCESSED, KEY_STRIP_BYTES, KEY_STRIP_PDF,
-    STAGE_TEMPLATE, MAX_PHOTOS,
+    STAGE_TEMPLATE, DEFAULT_LAYOUT, LAYOUT_MAP, LayoutConfig,
 )
 
-KEY_PENDING_PHOTO = "pending_photo"   # frozen frame waiting for user confirmation
+KEY_PENDING_PHOTO = "pending_photo"
 
 
 def init_session():
     defaults = {
         KEY_STAGE:          STAGE_TEMPLATE,
         KEY_FRAME:          "classic",
+        KEY_LAYOUT:         DEFAULT_LAYOUT,
         KEY_PHOTOS:         [],
         KEY_FILTER:         "none",
         KEY_STICKER:        "none",
@@ -50,17 +51,39 @@ def set_frame(key: str):
     st.session_state[KEY_FRAME] = key
 
 
+# --- Layout -----------------------------------------------------------------
+
+def get_layout_key() -> str:
+    return st.session_state.get(KEY_LAYOUT, DEFAULT_LAYOUT)
+
+def get_layout() -> LayoutConfig:
+    key = get_layout_key()
+    return LAYOUT_MAP.get(key, LAYOUT_MAP[DEFAULT_LAYOUT])
+
+def set_layout(key: str):
+    if st.session_state.get(KEY_LAYOUT) != key:
+        st.session_state[KEY_LAYOUT] = key
+        st.session_state[KEY_PHOTOS] = []   # reset photos on layout change
+        st.session_state[KEY_PROCESSED] = []
+
+def get_max_photos() -> int:
+    return get_layout().total
+
+def get_min_photos() -> int:
+    return get_layout().min_photos
+
+
 # --- Photos -----------------------------------------------------------------
 
 def get_photos() -> List[bytes]:
     return st.session_state[KEY_PHOTOS]
 
 def add_photo(data: bytes):
-    if len(st.session_state[KEY_PHOTOS]) < MAX_PHOTOS:
+    if len(st.session_state[KEY_PHOTOS]) < get_max_photos():
         st.session_state[KEY_PHOTOS].append(data)
 
 def photos_remaining() -> int:
-    return MAX_PHOTOS - len(st.session_state[KEY_PHOTOS])
+    return get_max_photos() - len(st.session_state[KEY_PHOTOS])
 
 def photos_count() -> int:
     return len(st.session_state[KEY_PHOTOS])
@@ -69,7 +92,7 @@ def clear_photos():
     st.session_state[KEY_PHOTOS] = []
 
 
-# --- Pending photo (freeze-frame confirmation) ------------------------------
+# --- Pending photo ----------------------------------------------------------
 
 def get_pending_photo() -> Optional[bytes]:
     return st.session_state.get(KEY_PENDING_PHOTO)
@@ -127,5 +150,6 @@ def reset_session():
         st.session_state[key] = None
     st.session_state[KEY_STAGE]   = STAGE_TEMPLATE
     st.session_state[KEY_FRAME]   = "classic"
+    st.session_state[KEY_LAYOUT]  = DEFAULT_LAYOUT
     st.session_state[KEY_FILTER]  = "none"
     st.session_state[KEY_STICKER] = "none"

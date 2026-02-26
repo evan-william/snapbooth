@@ -1,29 +1,20 @@
 """
-Assembles individual processed photos into a single photobooth strip image.
+Assembles individual processed photos into a photobooth strip or grid.
 
-Layout:
-  [ header — branding + frame-specific decorations ]
-  [ photo 1 with border ]
-  [ gap with side decorations ]
-  [ photo 2 with border ]
-  ...
-  [ footer — date/url ]
+Supports layouts: 1×N vertical strip, M×N grids.
 """
 
 import logging
 import math
 from datetime import date
-from typing import List
+from typing import List, Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
 from config.settings import (
-    FrameConfig,
-    STRIP_PHOTO_WIDTH,
-    STRIP_PHOTO_HEIGHT,
-    STRIP_PADDING,
-    STRIP_HEADER_H,
-    STRIP_FOOTER_H,
+    FrameConfig, LayoutConfig, LAYOUT_MAP, DEFAULT_LAYOUT,
+    SLOT_W, SLOT_H,
+    STRIP_PADDING, STRIP_HEADER_H, STRIP_FOOTER_H,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,154 +61,259 @@ def _resize_to_slot(img: Image.Image, width: int, height: int) -> Image.Image:
     """Cover-fit crop: fill the slot without distortion."""
     slot_ratio = width / height
     img_ratio  = img.width / img.height
-
     if img_ratio > slot_ratio:
         new_h = height
         new_w = int(img.width * (height / img.height))
     else:
         new_w = width
         new_h = int(img.height * (width / img.width))
-
     resized = img.resize((new_w, new_h), Image.LANCZOS)
     left = (new_w - width)  // 2
     top  = (new_h - height) // 2
     return resized.crop((left, top, left + width, top + height))
 
 
+def _draw_glow_bg(draw: ImageDraw.ImageDraw, frame: FrameConfig,
+                  canvas_w: int, canvas_h: int):
+    """Paint a subtle glow rectangle in the margins if frame has glow_color."""
+    if not frame.glow_color:
+        return
+    margin = STRIP_PADDING
+    # Draw a slightly lighter inner rectangle
+    gc = frame.glow_color
+    draw.rectangle(
+        [margin, STRIP_HEADER_H, canvas_w - margin, canvas_h - STRIP_FOOTER_H],
+        outline=gc, width=1,
+    )
+
+
 def _draw_decorations(draw: ImageDraw.ImageDraw, frame: FrameConfig,
-                      canvas_w: int, canvas_h: int, photo_y_positions: List[int]):
+                      canvas_w: int, canvas_h: int,
+                      photo_boxes: List):
     """
-    Scatter the frame's deco_symbols in the left and right margins
-    between (and beside) photos.
+    Scatter deco_symbols in ALL margins: left, right, header, footer,
+    and the gaps between photo rows.
     """
     if not frame.deco_symbols:
         return
 
     symbols  = frame.deco_symbols
     color    = frame.deco_color
-    font     = _load_font(13, bold=False)
-    margin_x = STRIP_PADDING - 2      # centre of left margin
-    right_x  = canvas_w - margin_x    # centre of right margin
+    font     = _load_font(13)
+    pad      = STRIP_PADDING
+    half_pad = max(6, pad // 2)
 
-    # Build a list of y positions — beside each photo at thirds
-    y_spots = []
-    for py in photo_y_positions:
-        y_spots.append(py + STRIP_PHOTO_HEIGHT // 4)
-        y_spots.append(py + STRIP_PHOTO_HEIGHT // 2)
-        y_spots.append(py + 3 * STRIP_PHOTO_HEIGHT // 4)
-    # Also header and footer zones
-    y_spots.append(STRIP_HEADER_H // 2)
-    y_spots.append(canvas_h - STRIP_FOOTER_H // 2)
+    x_left  = half_pad
+    x_right = canvas_w - half_pad
 
+    y_spots_left  = []
+    y_spots_right = []
+
+    # Header zone
+    for frac in (0.3, 0.7):
+        y = int(STRIP_HEADER_H * frac)
+        y_spots_left.append(y)
+        y_spots_right.append(y)
+
+    # Beside each photo row
+    if photo_boxes:
+        for (px, py, pw, ph) in photo_boxes:
+            # Only add for the leftmost and rightmost columns
+            if px <= pad + 2:           # leftmost column
+                for frac in (0.2, 0.5, 0.8):
+                    y_spots_left.append(py + int(ph * frac))
+            if px + pw >= canvas_w - pad - 2:   # rightmost column
+                for frac in (0.2, 0.5, 0.8):
+                    y_spots_right.append(py + int(ph * frac))
+
+    # Footer zone
+    for frac in (0.3, 0.7):
+        y = canvas_h - STRIP_FOOTER_H + int(STRIP_FOOTER_H * frac)
+        y_spots_left.append(y)
+        y_spots_right.append(y)
+
+    # Draw — alternate symbols
     sym_idx = 0
-    for y in y_spots:
+    for y in y_spots_left:
         sym = symbols[sym_idx % len(symbols)]
         try:
-            draw.text((margin_x, y), sym, font=font, fill=color, anchor="mm")
-            draw.text((right_x,  y), sym, font=font, fill=color, anchor="mm")
+            draw.text((x_left, y), sym, font=font, fill=color, anchor="mm")
         except Exception:
-            draw.text((max(0, margin_x - 6), max(0, y - 6)), sym, font=font, fill=color)
+            draw.text((max(0, x_left - 6), max(0, y - 6)), sym, font=font, fill=color)
         sym_idx += 1
+
+    for y in y_spots_right:
+        sym = symbols[sym_idx % len(symbols)]
+        try:
+            draw.text((x_right, y), sym, font=font, fill=color, anchor="mm")
+        except Exception:
+            draw.text((max(0, x_right - 6), max(0, y - 6)), sym, font=font, fill=color)
+        sym_idx += 1
+
+    # Also sprinkle symbols in the gaps between rows (horizontal gaps)
+    if photo_boxes and len(photo_boxes) > 1:
+        gap_font = _load_font(10)
+        # Find unique y positions of gap zones
+        rows_y = sorted(set(py for (_, py, _, _) in photo_boxes))
+        for ry in rows_y[1:]:
+            gap_cy = ry - pad // 2
+            for x_frac in (0.25, 0.5, 0.75):
+                gx = int(canvas_w * x_frac)
+                sym = symbols[sym_idx % len(symbols)]
+                try:
+                    draw.text((gx, gap_cy), sym, font=gap_font, fill=color, anchor="mm")
+                except Exception:
+                    draw.text((gx - 4, gap_cy - 4), sym, font=gap_font, fill=color)
+                sym_idx += 1
+
+
+def _slot_size_for_layout(layout: LayoutConfig) -> tuple:
+    """
+    Compute (slot_w, slot_h) so the strip fits a reasonable page width.
+    For multi-column layouts, we shrink slots proportionally.
+    """
+    base_canvas_w = SLOT_W + STRIP_PADDING * 2
+    if layout.cols == 1:
+        return SLOT_W, SLOT_H
+
+    # Target total canvas width ~ base_canvas_w * layout.cols (but cap it sensibly)
+    max_canvas = 900
+    avail_w = min(max_canvas, base_canvas_w * layout.cols)
+    # Available width for photos
+    photo_area_w = avail_w - STRIP_PADDING * (layout.cols + 1)
+    slot_w = max(100, photo_area_w // layout.cols)
+    # Keep aspect ratio
+    slot_h = int(slot_w * (SLOT_H / SLOT_W))
+    return slot_w, slot_h
 
 
 def compose_strip(photos: List[Image.Image], frame: FrameConfig,
+                  layout: Optional[LayoutConfig] = None,
                   placeholder: bool = False) -> Image.Image:
     """
-    Compose photos into a vertical photobooth strip.
+    Compose photos into a photobooth strip or grid.
 
     Args:
         photos:      PIL Images (already filtered/stickered).
         frame:       FrameConfig controlling look.
-        placeholder: If True, draw coloured rectangles instead of real photos
-                     (used for frame preview thumbnails).
+        layout:      LayoutConfig (cols × rows). Defaults to 1×4.
+        placeholder: Draw coloured rectangles instead of real photos.
     """
+    if layout is None:
+        layout = LAYOUT_MAP[DEFAULT_LAYOUT]
+
     if not photos and not placeholder:
         raise ValueError("No photos provided to compose_strip.")
 
-    n   = len(photos) if photos else 3   # preview uses 3 slots
-    pad = STRIP_PADDING
-    bw  = frame.border_width
+    n_total = layout.total
+    cols    = layout.cols
+    rows    = layout.rows
+    pad     = STRIP_PADDING
+    bw      = frame.border_width
 
-    canvas_w = STRIP_PHOTO_WIDTH + pad * 2
+    slot_w, slot_h = _slot_size_for_layout(layout)
+
+    canvas_w = cols * slot_w + (cols + 1) * pad
     canvas_h = (
         STRIP_HEADER_H
-        + n * STRIP_PHOTO_HEIGHT
-        + (n - 1) * pad
-        + pad
+        + rows * slot_h
+        + (rows + 1) * pad
         + STRIP_FOOTER_H
     )
 
     canvas = Image.new("RGB", (canvas_w, canvas_h), frame.bg_color)
     draw   = ImageDraw.Draw(canvas)
 
+    # ── Optional glow bg ────────────────────────────────────────────────────
+    _draw_glow_bg(draw, frame, canvas_w, canvas_h)
+
     # ── Header ──────────────────────────────────────────────────────────────
-    title_font = _load_font(24, bold=True)
-    sub_font   = _load_font(11)
+    title_font = _load_font(22, bold=True)
+    sub_font   = _load_font(10)
     htc        = frame.header_text_color
 
     title_w = _text_w(draw, "SnapBooth", title_font)
-    draw.text(((canvas_w - title_w) / 2, 10), "SnapBooth",
-              font=title_font, fill=htc)
+    draw.text(((canvas_w - title_w) / 2, 8), "SnapBooth", font=title_font, fill=htc)
 
     sub_text = "snapbooth.app"
     sub_w    = _text_w(draw, sub_text, sub_font)
-    draw.text(((canvas_w - sub_w) / 2, 42), sub_text,
-              font=sub_font, fill=htc)
+    draw.text(((canvas_w - sub_w) / 2, 38), sub_text, font=sub_font, fill=htc)
 
-    # Thin rule under header
     rule_color = tuple(max(0, c - 30) for c in frame.bg_color)
-    draw.line([(pad, STRIP_HEADER_H - 4), (canvas_w - pad, STRIP_HEADER_H - 4)],
-              fill=rule_color, width=1)
+    draw.line(
+        [(pad, STRIP_HEADER_H - 4), (canvas_w - pad, STRIP_HEADER_H - 4)],
+        fill=rule_color, width=1,
+    )
 
     # ── Photos ──────────────────────────────────────────────────────────────
-    photo_ys = []
     placeholder_colors = [
-        (200, 185, 175), (185, 200, 185), (175, 185, 205),
-        (205, 195, 175),
+        (200, 185, 175), (185, 200, 185), (175, 185, 205), (205, 195, 175),
+        (195, 190, 210), (190, 205, 195), (205, 190, 185), (180, 195, 210),
+        (210, 205, 185),
     ]
 
-    for i in range(n):
-        x = pad
-        y = STRIP_HEADER_H + i * (STRIP_PHOTO_HEIGHT + pad)
-        photo_ys.append(y)
+    photo_boxes = []
+    photo_idx   = 0
 
-        # Border
-        if bw > 0:
-            draw.rectangle(
-                [x - bw, y - bw,
-                 x + STRIP_PHOTO_WIDTH + bw,
-                 y + STRIP_PHOTO_HEIGHT + bw],
-                outline=frame.border_color,
-                width=bw,
-            )
+    for row in range(rows):
+        for col in range(cols):
+            if photo_idx >= n_total:
+                break
 
-        if placeholder:
-            c = placeholder_colors[i % len(placeholder_colors)]
-            draw.rectangle([x, y, x + STRIP_PHOTO_WIDTH, y + STRIP_PHOTO_HEIGHT], fill=c)
-        else:
-            slot = _resize_to_slot(photos[i], STRIP_PHOTO_WIDTH, STRIP_PHOTO_HEIGHT)
-            canvas.paste(slot, (x, y))
+            x = pad + col * (slot_w + pad)
+            y = STRIP_HEADER_H + pad + row * (slot_h + pad)
+
+            photo_boxes.append((x, y, slot_w, slot_h))
+
+            # Border
+            if bw > 0:
+                draw.rectangle(
+                    [x - bw, y - bw, x + slot_w + bw, y + slot_h + bw],
+                    outline=frame.border_color, width=bw,
+                )
+
+            if placeholder:
+                c = placeholder_colors[photo_idx % len(placeholder_colors)]
+                draw.rectangle([x, y, x + slot_w, y + slot_h], fill=c)
+            else:
+                if photo_idx < len(photos):
+                    slot_img = _resize_to_slot(photos[photo_idx], slot_w, slot_h)
+                    canvas.paste(slot_img, (x, y))
+                else:
+                    # Empty slot placeholder
+                    draw.rectangle([x, y, x + slot_w, y + slot_h],
+                                   fill=tuple(max(0, c - 20) for c in frame.bg_color))
+
+            photo_idx += 1
 
     # ── Decorations in margins ───────────────────────────────────────────────
-    _draw_decorations(draw, frame, canvas_w, canvas_h, photo_ys)
+    _draw_decorations(draw, frame, canvas_w, canvas_h, photo_boxes)
 
     # ── Footer ───────────────────────────────────────────────────────────────
-    footer_y   = canvas_h - STRIP_FOOTER_H + 10
-    date_str   = date.today().strftime("%Y · %m · %d")
-    date_font  = _load_font(10)
-    date_w     = _text_w(draw, date_str, date_font)
-    draw.text(((canvas_w - date_w) / 2, footer_y), date_str,
+    footer_y  = canvas_h - STRIP_FOOTER_H + 10
+    date_str  = date.today().strftime("%Y · %m · %d")
+    date_font = _load_font(9)
+    date_w    = _text_w(draw, date_str, date_font)
+    draw.text(((canvas_w - date_w) / 2, footer_y), date_str, font=date_font, fill=htc)
+
+    # Layout label in footer
+    layout_str = f"{layout.cols}×{layout.rows}"
+    layout_w   = _text_w(draw, layout_str, date_font)
+    draw.text((canvas_w - layout_w - pad, footer_y), layout_str,
               font=date_font, fill=htc)
 
     return canvas
 
 
-def compose_preview_strip(frame: FrameConfig, scale: float = 0.35) -> Image.Image:
+def compose_preview_strip(frame: FrameConfig,
+                           layout: Optional[LayoutConfig] = None,
+                           scale: float = 0.30) -> Image.Image:
     """
-    Generate a small thumbnail-sized preview of what a frame looks like,
-    using placeholder coloured rectangles instead of real photos.
+    Generate a small thumbnail preview for template selection.
     """
-    full = compose_strip([], frame, placeholder=True)
-    new_w = int(full.width * scale)
-    new_h = int(full.height * scale)
+    if layout is None:
+        layout = LAYOUT_MAP[DEFAULT_LAYOUT]
+    full  = compose_strip([], frame, layout=layout, placeholder=True)
+    new_w = max(60, int(full.width * scale))
+    new_h = max(80, int(full.height * scale))
     return full.resize((new_w, new_h), Image.LANCZOS)

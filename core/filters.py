@@ -62,10 +62,29 @@ def _filter_vivid(img: Image.Image) -> Image.Image:
 
 
 def _filter_soft(img: Image.Image) -> Image.Image:
-    # Slight blur + brightness boost + desaturate a touch
     blurred = img.filter(ImageFilter.GaussianBlur(radius=0.8))
     out = ImageEnhance.Brightness(blurred).enhance(1.08)
     return ImageEnhance.Color(out).enhance(0.85)
+
+
+def _filter_warm(img: Image.Image) -> Image.Image:
+    """Warm golden tones — boost reds/yellows, reduce blues."""
+    arr = _to_arr(img)
+    arr[:,:,0] += 20   # red up
+    arr[:,:,1] += 8    # green slight
+    arr[:,:,2] -= 25   # blue down
+    out = _to_pil(arr)
+    return ImageEnhance.Color(out).enhance(1.2)
+
+
+def _filter_fade(img: Image.Image) -> Image.Image:
+    """Faded / matte film look — lift shadows, reduce contrast."""
+    arr  = _to_arr(img)
+    # Lift blacks, pull whites — S-curve flatten
+    arr  = arr * 0.75 + 35
+    out  = _to_pil(arr)
+    out  = ImageEnhance.Color(out).enhance(0.7)
+    return ImageEnhance.Contrast(out).enhance(0.85)
 
 
 _FILTER_FN: Dict[str, Callable[[Image.Image], Image.Image]] = {
@@ -76,6 +95,8 @@ _FILTER_FN: Dict[str, Callable[[Image.Image], Image.Image]] = {
     "cool":   _filter_cool,
     "vivid":  _filter_vivid,
     "soft":   _filter_soft,
+    "warm":   _filter_warm,
+    "fade":   _filter_fade,
 }
 
 
