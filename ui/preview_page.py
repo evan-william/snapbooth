@@ -23,11 +23,31 @@ from core.compositor import compose_strip
 from core.exporter import export_jpg, export_pdf
 
 
+_FOOTER_CSS = """<style>
+.snap-footer {
+    margin-top: 3rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid #1e1e1e;
+    text-align: center;
+}
+.snap-footer-name {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #555;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+.snap-footer-copy {
+    font-size: 0.68rem;
+    color: #333;
+    margin-top: 0.2rem;
+    letter-spacing: 0.06em;
+}
+</style>"""
+
+
 def _bytes_to_pil(processed: list) -> list:
-    """
-    If session state contains JPEG bytes (from new camera_page), convert to PIL.
-    If already PIL objects (old session), return as-is.
-    """
+    """Convert bytes→PIL if camera_page stored bytes. If already PIL, return as-is."""
     result = []
     for item in processed:
         if isinstance(item, (bytes, bytearray)):
@@ -67,9 +87,9 @@ def _strip_preview_bytes(processed: list) -> bytes:
 
 
 def render():
-    processed = get_processed()
+    st.markdown(_FOOTER_CSS, unsafe_allow_html=True)
 
-    # Convert bytes → PIL if camera_page stored bytes (new camera_page compat)
+    processed = get_processed()
     if processed:
         processed = _bytes_to_pil(processed)
 
@@ -90,7 +110,6 @@ def render():
     col_ctrl, col_preview = st.columns([3, 2], gap="large")
 
     with col_ctrl:
-        # --- Photo thumbnails ---
         st.markdown('<p class="snap-section">Your Photos</p>', unsafe_allow_html=True)
         n_cols   = min(4, len(processed))
         th_cols  = st.columns(n_cols)
@@ -101,7 +120,7 @@ def render():
 
         st.markdown("---")
 
-        # --- Filter ---
+        # Filter
         st.markdown("**Filter**")
         current_filter = get_filter()
         filter_choice  = st.radio(
@@ -119,7 +138,7 @@ def render():
 
         st.markdown("")
 
-        # --- Sticker ---
+        # Sticker
         st.markdown("**Sticker**")
         current_sticker = get_sticker()
         sticker_choice  = st.radio(
@@ -137,7 +156,7 @@ def render():
 
         st.markdown("---")
 
-        # --- Frame ---
+        # Frame
         st.markdown("**Frame**")
         current_frame = get_frame()
         frame_keys    = list(FRAME_MAP.keys())
@@ -165,7 +184,6 @@ def render():
             if st.button("Generate Strip →", type="primary", use_container_width=True):
                 _generate_strip(processed)
 
-    # Live strip preview
     with col_preview:
         st.markdown('<p class="snap-section">Preview</p>', unsafe_allow_html=True)
         try:
@@ -176,6 +194,8 @@ def render():
             )
         except Exception as exc:
             st.warning(f"Preview unavailable: {exc}")
+
+    _render_footer()
 
 
 def _generate_strip(photos: list):
@@ -190,3 +210,15 @@ def _generate_strip(photos: list):
             st.rerun()
         except Exception as exc:
             st.error(f"Strip generation failed: {exc}")
+
+
+def _render_footer():
+    st.markdown(
+        """
+        <div class="snap-footer">
+            <div class="snap-footer-name">Evan Wollian</div>
+            <div class="snap-footer-copy">© 2025 Evan Wollian · SnapBooth · All rights reserved</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )

@@ -1,6 +1,5 @@
 """
 Stage 4 — Download.
-Shows the final strip and offers JPG + PDF download buttons.
 """
 
 import streamlit as st
@@ -11,8 +10,64 @@ from core.session import (
     set_stage, reset_session,
 )
 
+_PAGE_CSS = """<style>
+/* ── Download buttons — force readable text in ALL states ── */
+[data-testid="stDownloadButton"] > button {
+    width: 100% !important;
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.03em !important;
+}
+
+/* JPG = primary yellow */
+[data-testid="stDownloadButton"] > button[kind="primary"] {
+    background: #e0ff60 !important;
+    color: #111111 !important;
+    border: none !important;
+}
+[data-testid="stDownloadButton"] > button[kind="primary"]:hover {
+    background: #cff040 !important;
+    color: #111111 !important;
+}
+
+/* PDF = secondary — white text on dark border, always visible */
+[data-testid="stDownloadButton"] > button[kind="secondary"] {
+    background: #1e1e1e !important;
+    color: #f0f0f0 !important;
+    border: 1px solid #555 !important;
+}
+[data-testid="stDownloadButton"] > button[kind="secondary"]:hover {
+    background: #2a2a2a !important;
+    color: #ffffff !important;
+    border-color: #888 !important;
+}
+
+/* Footer */
+.snap-footer {
+    margin-top: 3rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid #1e1e1e;
+    text-align: center;
+}
+.snap-footer-name {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #555;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+.snap-footer-copy {
+    font-size: 0.68rem;
+    color: #333;
+    margin-top: 0.2rem;
+    letter-spacing: 0.06em;
+}
+</style>"""
+
 
 def render():
+    st.markdown(_PAGE_CSS, unsafe_allow_html=True)
+
     jpg = get_strip_bytes()
     pdf = get_strip_pdf()
 
@@ -32,21 +87,6 @@ def render():
     st.markdown("---")
     st.markdown("**Download**")
 
-    st.markdown(
-        """<style>
-        [data-testid="stDownloadButton"] > button {
-            color: #111111 !important;
-            font-weight: 700 !important;
-        }
-        [data-testid="stDownloadButton"] > button[kind="primary"] {
-            background: #e0ff60 !important;
-            color: #111111 !important;
-            border: none !important;
-        }
-        </style>""",
-        unsafe_allow_html=True,
-    )
-
     col_jpg, col_pdf = st.columns(2)
     with col_jpg:
         st.download_button(
@@ -65,6 +105,7 @@ def render():
                 data=pdf,
                 file_name="snapbooth_strip.pdf",
                 mime="application/pdf",
+                type="secondary",
                 use_container_width=True,
             )
         else:
@@ -82,3 +123,17 @@ def render():
         if st.button("New Session", type="primary", use_container_width=True):
             reset_session()
             st.rerun()
+
+    _render_footer()
+
+
+def _render_footer():
+    st.markdown(
+        """
+        <div class="snap-footer">
+            <div class="snap-footer-name">Evan Wollian</div>
+            <div class="snap-footer-copy">© 2025 Evan Wollian · SnapBooth · All rights reserved</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
