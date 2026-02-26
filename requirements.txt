@@ -1,12 +1,9 @@
 # Core
 streamlit>=1.32.0
 
-# Image processing
+# Image processing — Pillow + NumPy only, no OpenCV/MediaPipe
 Pillow>=10.0.0
 numpy>=1.24.0
-
-# Face detection / sticker overlay
-mediapipe>=0.10.0
 
 # PDF export
 reportlab>=4.1.0
