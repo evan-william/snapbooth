@@ -40,12 +40,14 @@ def render():
         with col:
             is_sel   = layout.key == current_layout
             btn_type = "primary" if is_sel else "secondary"
-            label    = f"✓ {layout.cols}×{layout.rows}" if is_sel else f"{layout.cols}×{layout.rows}"
-            st.markdown(
-                f'<div style="text-align:center;font-size:0.65rem;color:#888;'
-                f'margin-bottom:2px;">{layout.total} photos</div>',
-                unsafe_allow_html=True,
+            # Keep label short — no ✓ prefix to avoid Streamlit line-wrapping
+            label    = f"{layout.cols}×{layout.rows}"
+            dot_html = (
+                '<div style="text-align:center;font-size:0.7rem;'
+                f'color:{"#e0ff60" if is_sel else "#666"};margin-bottom:2px;">'
+                f'{"●" if is_sel else "○"} {layout.total} photos</div>'
             )
+            st.markdown(dot_html, unsafe_allow_html=True)
             if st.button(label, key=f"layout_{layout.key}", type=btn_type,
                          use_container_width=True):
                 set_layout(layout.key)
@@ -89,7 +91,7 @@ def render():
                     )
 
                 if st.button(
-                    f"✓ {frame.label}" if is_selected else frame.label,
+                    frame.label,
                     key=f"frame_btn_{frame.key}",
                     type="primary" if is_selected else "secondary",
                     use_container_width=True,
@@ -111,3 +113,4 @@ def render():
         ):
             set_stage(STAGE_CAPTURE)
             st.rerun()
+            

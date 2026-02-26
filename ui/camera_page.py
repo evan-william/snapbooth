@@ -107,7 +107,7 @@ def render():
             st.rerun()
 
     with col_next:
-        can_proceed = count >= min_photos and pending is None
+        can_proceed = count >= max_photos and pending is None
         if st.button(
             "Preview →",
             type="primary",
@@ -117,8 +117,8 @@ def render():
             set_stage(STAGE_PREVIEW)
             st.rerun()
 
-    if count > 0 and count < min_photos and pending is None:
-        st.caption(f"Take at least {min_photos} photos to continue.")
+    if count > 0 and count < max_photos and pending is None:
+        st.caption(f"{max_photos - count} more photo{'s' if max_photos - count > 1 else ''} to go.")
 
 
 def _render_progress_dots(done: int, total: int):
