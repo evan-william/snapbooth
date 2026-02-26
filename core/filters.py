@@ -1,30 +1,28 @@
 """
 Image filter pipeline.
 
-Each filter receives a PIL Image (RGB) and returns a new PIL Image (RGB).
-OpenCV is used for operations that benefit from its performance;
-PIL handles the rest. No in-place mutation — always returns a fresh image.
+Uses only Pillow + NumPy — no OpenCV dependency — so it works across all
+Python versions including 3.13+. No in-place mutation; always returns a
+fresh image.
 """
 
-import io
 import logging
 from typing import Callable, Dict
 
-import cv2
 import numpy as np
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageEnhance, ImageFilter
 
 logger = logging.getLogger(__name__)
 
 
 # --- Helpers ----------------------------------------------------------------
 
-def _pil_to_bgr(img: Image.Image) -> np.ndarray:
-    return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+def _to_arr(img: Image.Image) -> np.ndarray:
+    return np.array(img, dtype=np.float32)
 
 
-def _bgr_to_pil(arr: np.ndarray) -> Image.Image:
-    return Image.fromarray(cv2.cvtColor(arr, cv2.COLOR_BGR2RGB))
+def _to_pil(arr: np.ndarray) -> Image.Image:
+    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB")
 
 
 # --- Individual filters -----------------------------------------------------
@@ -34,55 +32,51 @@ def _filter_none(img: Image.Image) -> Image.Image:
 
 
 def _filter_bw(img: Image.Image) -> Image.Image:
-    bgr = _pil_to_bgr(img)
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    gray_bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-    return _bgr_to_pil(gray_bgr)
+    # Luminosity-weighted greyscale, then back to RGB
+    gray = img.convert("L")
+    return gray.convert("RGB")
 
 
 def _filter_sepia(img: Image.Image) -> Image.Image:
-    bgr = _pil_to_bgr(img)
-    # Sepia kernel applied per-channel
-    kernel = np.array([
-        [0.272, 0.534, 0.131],
-        [0.349, 0.686, 0.168],
-        [0.393, 0.769, 0.189],
-    ], dtype=np.float32)
-    sepia = cv2.transform(bgr.astype(np.float32), kernel)
-    sepia = np.clip(sepia, 0, 255).astype(np.uint8)
-    return _bgr_to_pil(sepia)
+    arr = _to_arr(img)
+    r = arr[:, :, 0]
+    g = arr[:, :, 1]
+    b = arr[:, :, 2]
+    # Standard sepia matrix (input in RGB order)
+    out = np.stack([
+        r * 0.393 + g * 0.769 + b * 0.189,
+        r * 0.349 + g * 0.686 + b * 0.168,
+        r * 0.272 + g * 0.534 + b * 0.131,
+    ], axis=2)
+    return _to_pil(out)
 
 
 def _filter_retro(img: Image.Image) -> Image.Image:
-    # Sepia base + boosted contrast + slight vignette
-    base = _filter_sepia(img)
-    bgr = _pil_to_bgr(base)
+    # Sepia base → fade (blend with mid-grey) → vignette
+    base = _to_arr(_filter_sepia(img))
 
-    # Reduce brightness range (faded look)
-    bgr = cv2.addWeighted(bgr, 0.8, np.full_like(bgr, 30), 0.2, 0)
+    # Fade: blend 80% sepia + 20% flat grey (30)
+    faded = base * 0.80 + 30.0 * 0.20
 
-    # Vignette
-    rows, cols = bgr.shape[:2]
-    sigma = max(rows, cols) * 0.6
-    X = cv2.getGaussianKernel(cols, sigma)
-    Y = cv2.getGaussianKernel(rows, sigma)
-    mask = Y * X.T
-    mask = mask / mask.max()
-    vignette = (bgr * mask[:, :, np.newaxis]).astype(np.uint8)
-    return _bgr_to_pil(vignette)
+    # Vignette via a gaussian mask
+    h, w = faded.shape[:2]
+    yy, xx = np.ogrid[:h, :w]
+    cy, cx = h / 2.0, w / 2.0
+    sigma  = max(h, w) * 0.55
+    mask   = np.exp(-((xx - cx) ** 2 + (yy - cy) ** 2) / (2 * sigma ** 2))
+    mask   = (mask / mask.max()).reshape(h, w, 1)
+
+    return _to_pil(faded * mask)
 
 
 def _filter_cool(img: Image.Image) -> Image.Image:
-    bgr = _pil_to_bgr(img)
-    # Shift blue channel up, red channel down
-    b, g, r = cv2.split(bgr)
-    r = np.clip(r.astype(np.int16) - 25, 0, 255).astype(np.uint8)
-    b = np.clip(b.astype(np.int16) + 30, 0, 255).astype(np.uint8)
-    return _bgr_to_pil(cv2.merge([b, g, r]))
+    arr = _to_arr(img)
+    arr[:, :, 0] -= 25   # red down
+    arr[:, :, 2] += 30   # blue up
+    return _to_pil(arr)
 
 
 def _filter_vivid(img: Image.Image) -> Image.Image:
-    # Bump saturation and contrast via PIL's ImageEnhance (simpler + reliable)
     out = ImageEnhance.Color(img).enhance(1.8)
     out = ImageEnhance.Contrast(out).enhance(1.3)
     return out
