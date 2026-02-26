@@ -6,30 +6,32 @@ Root-cause fixes:
     Streamlit's camera_input widget renders the raw captured frame as an <img>
     inside the widget BEFORE Python runs. Our CSS `scaleX(-1)` only targets
     <video>, so that captured img appears unflipped for a split second.
-    Fix: also apply scaleX(-1) to [data-testid="stCameraInput"] img so the
-    captured still matches the mirrored video — no jarring flip visible.
+    Fix: also apply scaleX(-1) to [data-testid="stCameraInput"] img.
 
-  GLITCH ON LAST PHOTO:
-    After accepting the last photo, we previously called set_stage(PREVIEW)
-    + st.rerun(), then preview_page had to process all photos cold (spinner).
-    During that processing Streamlit re-renders multiple times, causing the
-    visual "stuck / back-and-forth" effect the user sees.
-    Fix: process all photos RIGHT HERE on the camera page before switching,
-    store them in session state, then switch. Preview page renders instantly.
+  FLICKER ON LAST PHOTO → PREVIEW:
+    st.spinner() is a context manager that sends an intermediate WebSocket
+    delta to the browser BEFORE the code inside runs. This renders the
+    camera_page UI + spinner to the user, THEN preview_page renders.
+    The browser sees 3 frames: camera → camera+spinner → preview = FLICKER.
+
+    Fix: do NOT use st.spinner() inside any button callback, ever.
+    Call _build_processed_now() INLINE with no context manager wrapping it.
+    Flow becomes: click → Python runs synchronously → set_stage(PREVIEW) →
+    st.rerun() → ONE clean render of preview_page. Zero intermediate renders.
 """
 
 import io
 import streamlit as st
 from PIL import Image
 
-from config.settings import STAGE_PREVIEW, STAGE_TEMPLATE, FILTER_MAP, STICKER_MAP
+from config.settings import STAGE_PREVIEW, STAGE_TEMPLATE, STICKER_MAP
 from core.session import (
     add_photo, photos_count,
     set_stage, clear_photos,
     get_pending_photo, set_pending_photo,
     get_max_photos, get_layout,
     get_photos, get_filter, get_sticker,
-    set_processed, get_processed,
+    set_processed,
 )
 from core.validation import validate_image_bytes, safe_open_image
 from core.filters import apply_filter
@@ -49,7 +51,10 @@ def _mirror_image(data: bytes) -> bytes:
 
 
 def _build_processed_now() -> list:
-    """Process all stored photos with current filter/sticker. Called before stage switch."""
+    """
+    Process all stored photos with current filter/sticker.
+    Called INLINE in button callback — NO st.spinner(), NO context manager.
+    """
     filter_key  = get_filter()
     sticker_cfg = STICKER_MAP.get(get_sticker())
     result = []
@@ -65,17 +70,9 @@ def _build_processed_now() -> list:
 
 
 _CAMERA_CSS = """<style>
-/* Mirror live video feed → selfie feel */
 [data-testid="stCameraInput"] video {
     transform: scaleX(-1) !important;
 }
-/*
- * KEY FIX: After capture, Streamlit shows the raw captured frame as an <img>
- * inside the widget BEFORE Python reacts. That img is unflipped → user sees
- * the jarring flip for a split second.
- * By also flipping the img, the preview looks identical to the video feed,
- * so the transition is invisible. Python-side we still flip the bytes normally.
- */
 [data-testid="stCameraInput"] img {
     transform: scaleX(-1) !important;
 }
@@ -83,7 +80,6 @@ _CAMERA_CSS = """<style>
 
 
 def render():
-    # Inject CSS at the very top, every render
     st.markdown(_CAMERA_CSS, unsafe_allow_html=True)
 
     max_photos = get_max_photos()
@@ -91,7 +87,7 @@ def render():
     count      = photos_count()
     pending    = get_pending_photo()
 
-    # ── Hard guard: if already full and not confirming, go straight to preview
+    # Hard guard: full and not in confirmation → go to preview
     if count >= max_photos and pending is None:
         set_stage(STAGE_PREVIEW)
         st.rerun()
@@ -128,18 +124,21 @@ def render():
                 new_count = photos_count()
 
                 if new_count >= max_photos:
-                    # ── GLITCH FIX: pre-process photos HERE before switching ──
-                    # This avoids the cold-start processing in preview_page which
-                    # caused the "stuck / flickering" transition the user saw.
-                    with st.spinner("✨ Preparing your strip…"):
-                        processed = _build_processed_now()
-                        if processed:
-                            set_processed(processed)
+                    # ── KEY FIX ─────────────────────────────────────────────
+                    # NO st.spinner() here. st.spinner() is a context manager
+                    # that pushes a WebSocket delta to the browser IMMEDIATELY
+                    # when entered — this renders camera_page UI + spinner as
+                    # an intermediate frame, causing the visible flicker.
+                    #
+                    # Calling the function INLINE with no wrapper means:
+                    # Python runs synchronously → state updated → st.rerun()
+                    # fires → ONE clean render of preview_page. Done.
+                    processed = _build_processed_now()
+                    if processed:
+                        set_processed(processed)
                     set_stage(STAGE_PREVIEW)
-                    # Single clean rerun → preview page renders immediately
-                    st.rerun()
-                else:
-                    st.rerun()
+
+                st.rerun()
 
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("← Back", type="secondary"):
@@ -148,7 +147,7 @@ def render():
             set_stage(STAGE_TEMPLATE)
             st.rerun()
 
-        return  # ← early return: don't render camera widget while confirming
+        return  # Don't render camera widget while confirming
 
     # ══════════════════════════════════════════════════════════════════════
     # BRANCH B — Live camera
@@ -185,7 +184,6 @@ def render():
         if err:
             st.error(f"Could not use that image: {err}")
         else:
-            # Flip bytes to match what user saw (video was mirrored via CSS)
             mirrored = _mirror_image(raw)
             set_pending_photo(mirrored)
             st.rerun()
