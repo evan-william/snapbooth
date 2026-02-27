@@ -4,12 +4,20 @@
 
 # SnapBooth
 
-**A virtual photobooth — take shots, apply effects, download your strip**
+**A virtual photobooth, take shots, apply effects, download your strip**
 
 [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.32+-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://streamlit.io/)
 [![License](https://img.shields.io/badge/License-MIT-22c55e?style=for-the-badge)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-pytest-6d28d9?style=for-the-badge)](tests/)
+
+<br/>
+
+[![Live Demo](https://img.shields.io/badge/🚀%20Try%20It%20Live-snapbooth.streamlit.app-e0ff60?style=for-the-badge&labelColor=111111)](https://snapbooth.streamlit.app/)
+
+<br/>
+
+> **No install needed.** Open in your browser, allow camera access, and start shooting. ✨
 
 </div>
 
@@ -158,6 +166,8 @@ snapbooth/
 - [x] Mobile block screen
 - [ ] Timer countdown before each shot
 - [ ] Custom text overlay on strip header/footer
+- [ ] Background removal (via `rembg`)
+- [x] Streamlit Cloud deployment → [snapbooth.streamlit.app](https://snapbooth.streamlit.app/)
 
 ---
 
@@ -180,6 +190,6 @@ Distributed under the MIT License. See [LICENSE](LICENSE) for details.
 
 <div align="center">
 
-Built with ❤️ by **Evan William** · © 2026 SnapBooth · All rights reserved
+Built by **Evan William** · © 2026 SnapBooth · All rights reserved
 
 </div>
