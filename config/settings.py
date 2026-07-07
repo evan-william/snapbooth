@@ -261,6 +261,14 @@ FILTERS: List[FilterConfig] = [
     FilterConfig("tokyo",        "🗼 Tokyo"),
     FilterConfig("cotton_candy", "🩷 Candy"),
     FilterConfig("polaroid",     "📷 Polaroid"),
+    # Premium booth / purikura inspired
+    FilterConfig("kstrip",        "🎞️ K-Strip"),
+    FilterConfig("milky",         "🥛 Milky Skin"),
+    FilterConfig("purikura",      "💖 Purikura Pop"),
+    FilterConfig("angel_blush",   "🪽 Angel Blush"),
+    FilterConfig("blue_hour",     "🫧 Blue Hour"),
+    FilterConfig("cocoa_film",    "🍫 Cocoa Film"),
+    FilterConfig("sticker_shop",  "🍬 Sticker Shop"),
 ]
 
 FILTER_MAP = {f.key: f for f in FILTERS}
@@ -277,6 +285,16 @@ class StickerConfig:
 
 STICKERS: List[StickerConfig] = [
     StickerConfig("none",       "None",         (0,   0,   0)),
+    StickerConfig("cloud_pup",  "Cloud Pup",     (120, 190, 255),  (255, 245, 255)),
+    StickerConfig("cinna_cafe", "Cinna Cafe",    (188, 120,  70),  (255, 220, 170)),
+    StickerConfig("bunny_diary","Bunny Diary",   (255, 150, 190),  (255, 235, 245)),
+    StickerConfig("kitty_beam", "Kitty Beam",    (255, 125, 165),  (255, 245, 255)),
+    StickerConfig("teddy_plush","Teddy Plush",   (175, 115,  75),  (255, 210, 150)),
+    StickerConfig("angel_core", "Angel Core",    (180, 215, 255),  (255, 255, 255)),
+    StickerConfig("ribbon_pop", "Ribbon Pop",    (255,  95, 145),  (255, 205, 225)),
+    StickerConfig("dessert",    "Dessert Deco",  (255, 170,  95),  (255, 230, 150)),
+    StickerConfig("purikura",   "Purikura",      (255, 120, 210),  (120, 220, 255)),
+    StickerConfig("idol_star",  "Idol Star",     (255, 215,  70),  (180, 230, 255)),
     StickerConfig("hearts",     "Hearts",        (255,  90, 120)),
     StickerConfig("stars",      "Stars",         (255, 205,  50)),
     StickerConfig("flowers",    "Flowers",       (255, 130, 180)),

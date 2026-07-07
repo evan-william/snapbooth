@@ -250,6 +250,95 @@ def _filter_polaroid(img: Image.Image) -> Image.Image:
     return out
 
 
+def _bloom(img: Image.Image, radius: float = 2.2, strength: float = 0.18) -> Image.Image:
+    """Add a subtle soft glow while keeping the original detail readable."""
+    glow = img.filter(ImageFilter.GaussianBlur(radius=radius))
+    return Image.blend(img, glow, strength)
+
+
+def _filter_kstrip(img: Image.Image) -> Image.Image:
+    """Korean four-cut studio look: clean skin, soft light, muted contrast."""
+    out = ImageEnhance.Brightness(img).enhance(1.08)
+    out = ImageEnhance.Color(out).enhance(0.92)
+    out = ImageEnhance.Contrast(out).enhance(1.08)
+    out = _bloom(out, radius=1.6, strength=0.10)
+    return ImageEnhance.Sharpness(out).enhance(1.12)
+
+
+def _filter_milky(img: Image.Image) -> Image.Image:
+    """Creamy bright filter with lifted shadows and gentle pink highlights."""
+    arr = _to_arr(img)
+    arr = arr * 0.78 + 48
+    arr[:, :, 0] = np.clip(arr[:, :, 0] + 10, 0, 255)
+    arr[:, :, 1] = np.clip(arr[:, :, 1] + 5, 0, 255)
+    arr[:, :, 2] = np.clip(arr[:, :, 2] + 4, 0, 255)
+    out = _to_pil(arr)
+    out = ImageEnhance.Color(out).enhance(0.72)
+    return _bloom(out, radius=2.0, strength=0.12)
+
+
+def _filter_purikura_pop(img: Image.Image) -> Image.Image:
+    """Glossy candy-pink purikura feel: bright, high saturation, cute glow."""
+    arr = _to_arr(img)
+    mean = arr.mean(axis=2, keepdims=True)
+    arr = mean + (arr - mean) * 1.48
+    arr = arr * 0.90 + 22
+    arr[:, :, 0] = np.clip(arr[:, :, 0] + 18, 0, 255)
+    arr[:, :, 2] = np.clip(arr[:, :, 2] + 10, 0, 255)
+    out = _to_pil(arr)
+    out = ImageEnhance.Contrast(out).enhance(1.10)
+    return _bloom(out, radius=2.8, strength=0.16)
+
+
+def _filter_angel_blush(img: Image.Image) -> Image.Image:
+    """Airy angelcore filter: pale blue highlights, blush pink mids."""
+    arr = _to_arr(img)
+    arr = arr * 0.82 + 36
+    arr[:, :, 0] = np.clip(arr[:, :, 0] + 16, 0, 255)
+    arr[:, :, 1] = np.clip(arr[:, :, 1] + 6, 0, 255)
+    arr[:, :, 2] = np.clip(arr[:, :, 2] + 20, 0, 255)
+    out = _to_pil(arr)
+    out = ImageEnhance.Color(out).enhance(0.82)
+    out = ImageEnhance.Brightness(out).enhance(1.04)
+    return _bloom(out, radius=2.5, strength=0.18)
+
+
+def _filter_blue_hour(img: Image.Image) -> Image.Image:
+    """Cool dreamy evening booth look with icy shadows and bright faces."""
+    arr = _to_arr(img)
+    arr[:, :, 0] = np.clip(arr[:, :, 0] * 0.92 - 4, 0, 255)
+    arr[:, :, 1] = np.clip(arr[:, :, 1] * 1.02 + 4, 0, 255)
+    arr[:, :, 2] = np.clip(arr[:, :, 2] * 1.14 + 18, 0, 255)
+    out = _to_pil(arr)
+    out = ImageEnhance.Brightness(out).enhance(1.06)
+    out = ImageEnhance.Contrast(out).enhance(1.12)
+    return _bloom(out, radius=1.8, strength=0.12)
+
+
+def _filter_cocoa_film(img: Image.Image) -> Image.Image:
+    """Warm chocolate film filter with soft blacks and creamy highlights."""
+    arr = _to_arr(img)
+    arr = arr * 0.84 + 24
+    arr[:, :, 0] = np.clip(arr[:, :, 0] + 18, 0, 255)
+    arr[:, :, 1] = np.clip(arr[:, :, 1] + 8, 0, 255)
+    arr[:, :, 2] = np.clip(arr[:, :, 2] - 12, 0, 255)
+    out = _to_pil(arr)
+    out = ImageEnhance.Color(out).enhance(0.88)
+    return ImageEnhance.Contrast(out).enhance(0.96)
+
+
+def _filter_sticker_shop(img: Image.Image) -> Image.Image:
+    """Bright sticker-shop print look: punchy color, crisp edges, glossy light."""
+    arr = _to_arr(img)
+    mean = arr.mean(axis=2, keepdims=True)
+    arr = mean + (arr - mean) * 1.75
+    arr = arr * 0.92 + 18
+    out = _to_pil(arr)
+    out = ImageEnhance.Contrast(out).enhance(1.22)
+    out = ImageEnhance.Sharpness(out).enhance(1.55)
+    return _bloom(out, radius=1.4, strength=0.08)
+
+
 _FILTER_FN: Dict[str, Callable[[Image.Image], Image.Image]] = {
     # Original
     "none":          _filter_none,
@@ -276,6 +365,13 @@ _FILTER_FN: Dict[str, Callable[[Image.Image], Image.Image]] = {
     "tokyo":         _filter_tokyo,
     "cotton_candy":  _filter_cotton_candy,
     "polaroid":      _filter_polaroid,
+    "kstrip":        _filter_kstrip,
+    "milky":         _filter_milky,
+    "purikura":      _filter_purikura_pop,
+    "angel_blush":   _filter_angel_blush,
+    "blue_hour":     _filter_blue_hour,
+    "cocoa_film":    _filter_cocoa_film,
+    "sticker_shop":  _filter_sticker_shop,
 }
 
 

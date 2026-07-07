@@ -24,6 +24,48 @@ from core.exporter import export_jpg, export_pdf
 
 
 _FOOTER_CSS = """<style>
+.choice-title {
+    font-size: 0.78rem;
+    color: #8b8b8b;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin: 0 0 0.45rem;
+}
+.choice-card {
+    border: 1px solid #292929;
+    background: #111;
+    border-radius: 8px;
+    padding: 0.45rem 0.5rem;
+    min-height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: #d8d8d8;
+    font-size: 0.78rem;
+    font-weight: 650;
+    line-height: 1.2;
+    margin-bottom: 0.25rem;
+}
+.choice-card.selected {
+    border-color: #e0ff60;
+    background: linear-gradient(135deg, #1d2308, #111);
+    color: #e0ff60;
+    box-shadow: 0 0 12px #e0ff6030;
+}
+.choice-card .choice-sub {
+    display: block;
+    color: #686868;
+    font-size: 0.62rem;
+    font-weight: 500;
+    margin-top: 0.15rem;
+}
+.choice-card.selected .choice-sub { color: #9faf46; }
+.stButton > button {
+    white-space: normal !important;
+    min-height: 2.45rem;
+    line-height: 1.15;
+}
 .snap-footer {
     margin-top: 3rem;
     padding-top: 1.2rem;
@@ -86,6 +128,36 @@ def _strip_preview_bytes(processed: list) -> bytes:
     return buf.getvalue()
 
 
+def _render_option_grid(title: str, options: list, current_key: str,
+                        key_prefix: str, columns: int = 3) -> str:
+    st.markdown(f'<p class="choice-title">{title}</p>', unsafe_allow_html=True)
+    selected = current_key
+
+    for row_start in range(0, len(options), columns):
+        row = options[row_start:row_start + columns]
+        cols = st.columns(len(row), gap="small")
+        for col, option in zip(cols, row):
+            opt_key = option.key
+            label = option.label
+            is_selected = opt_key == current_key
+            card_class = "choice-card selected" if is_selected else "choice-card"
+            button_label = f"✓ {label}" if is_selected else label
+            with col:
+                st.markdown(
+                    f'<div class="{card_class}"><span>{label}</span></div>',
+                    unsafe_allow_html=True,
+                )
+                if st.button(
+                    button_label,
+                    key=f"{key_prefix}_{opt_key}",
+                    type="primary" if is_selected else "secondary",
+                    use_container_width=True,
+                ):
+                    selected = opt_key
+
+    return selected
+
+
 def render():
     st.markdown(_FOOTER_CSS, unsafe_allow_html=True)
 
@@ -120,16 +192,13 @@ def render():
 
         st.markdown("---")
 
-        # Filter
-        st.markdown("**Filter**")
         current_filter = get_filter()
-        filter_choice  = st.radio(
-            "filter_select",
-            options=[f.key for f in FILTERS],
-            format_func=lambda k: next(f.label for f in FILTERS if f.key == k),
-            index=next(i for i, f in enumerate(FILTERS) if f.key == current_filter),
-            horizontal=True,
-            label_visibility="collapsed",
+        filter_choice = _render_option_grid(
+            "Filter",
+            FILTERS,
+            current_filter,
+            "filter_choice",
+            columns=3,
         )
         if filter_choice != current_filter:
             set_filter(filter_choice)
@@ -138,16 +207,13 @@ def render():
 
         st.markdown("")
 
-        # Sticker
-        st.markdown("**Sticker**")
         current_sticker = get_sticker()
-        sticker_choice  = st.radio(
-            "sticker_select",
-            options=[s.key for s in STICKERS],
-            format_func=lambda k: next(s.label for s in STICKERS if s.key == k),
-            index=next(i for i, s in enumerate(STICKERS) if s.key == current_sticker),
-            horizontal=True,
-            label_visibility="collapsed",
+        sticker_choice = _render_option_grid(
+            "Sticker",
+            STICKERS,
+            current_sticker,
+            "sticker_choice",
+            columns=3,
         )
         if sticker_choice != current_sticker:
             set_sticker(sticker_choice)
@@ -156,17 +222,13 @@ def render():
 
         st.markdown("---")
 
-        # Frame
-        st.markdown("**Frame**")
         current_frame = get_frame()
-        frame_keys    = list(FRAME_MAP.keys())
-        frame_choice  = st.radio(
-            "frame_radio",
-            options=frame_keys,
-            format_func=lambda k: FRAME_MAP[k].label,
-            index=frame_keys.index(current_frame) if current_frame in frame_keys else 0,
-            horizontal=True,
-            label_visibility="collapsed",
+        frame_choice = _render_option_grid(
+            "Frame",
+            list(FRAME_MAP.values()),
+            current_frame,
+            "frame_choice",
+            columns=3,
         )
         if frame_choice != current_frame:
             set_frame(frame_choice)
